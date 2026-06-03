@@ -1,0 +1,88 @@
+{
+  "sessions": [
+    {
+      "date": "2026-04-14",
+      "started_at": "2026-04-14T16:30:00+05:30",
+      "ended_at": "2026-04-14T17:59:30+05:30",
+      "duration_minutes": 90,
+      "summary": "Bootstrapped uxie Discord bot project: team-swarm researched discord.js v14 + scrypt integration, produced two briefs, started brainstorming.",
+      "session_type": "planning",
+      "complexity": "medium",
+      "model": {
+        "orchestrator": "claude-opus-4-6",
+        "agents": "claude-opus-4-6"
+      },
+      "tokens": {
+        "context_mode": {
+          "total_data_processed_mb": 0.0241,
+          "tool_calls": 2
+        },
+        "estimated_session_total": {
+          "input_tokens": 400000,
+          "output_tokens": 80000,
+          "total_tokens": 480000
+        }
+      },
+      "usage_snapshot": null,
+      "agents": {
+        "count": 2,
+        "total_tokens": 200000,
+        "spawned": [
+          {
+            "type": "researcher",
+            "name": "djs-researcher",
+            "tokens": 100000,
+            "tools_used": 25
+          },
+          {
+            "type": "researcher",
+            "name": "scrypt-ideator",
+            "tokens": 100000,
+            "tools_used": 30
+          }
+        ]
+      },
+      "deliverables": [
+        {
+          "type": "research",
+          "path": "docs/scrypt-integration-context.md",
+          "scope": ["scrypt HLD placement", "MCP tool inventory", "open questions"],
+          "lines": 72
+        },
+        {
+          "type": "research",
+          "path": "docs/discordjs-research.md",
+          "scope": ["discord.js v14.26 brief", "Components V2", "runtime choice", "project layout", "deployment recommendations"],
+          "lines": 384
+        },
+        {
+          "type": "research",
+          "path": "docs/scrypt-feature-ideation.md",
+          "scope": ["vault domains", "MCP UX mapping", "interaction models", "11 feature cards", "non-goals"],
+          "lines": 413
+        }
+      ],
+      "skills_used": ["using-superpowers", "brainstorming", "log-session"],
+      "tools_used_summary": {
+        "Bash": 3,
+        "Write": 2,
+        "Read": 3,
+        "Agent": 2,
+        "TeamCreate": 1,
+        "TaskCreate": 8,
+        "TaskUpdate": 1,
+        "SendMessage": 2,
+        "ToolSearch": 2,
+        "Skill": 2,
+        "mcp__plugin_context-mode_context-mode__ctx_batch_execute": 2,
+        "mcp__plugin_context-mode_context-mode__ctx_stats": 1,
+        "mcp__scrypt__search_notes": 1,
+        "mcp__scrypt__semantic_search": 1,
+        "mcp__scrypt__get_note": 1
+      },
+      "satisfaction": 3,
+      "tags": ["uxie", "discord-bot", "scrypt-integration", "team-swarm", "research", "brainstorming-start"],
+      "cost_usd": 18.60
+    }
+  ]
+}

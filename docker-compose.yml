@@ -1,0 +1,17 @@
+services:
+  uxie:
+    build: .
+    env_file: .env
+    depends_on:
+      - scrypt
+    networks:
+      - uxie-net
+  scrypt:
+    image: scrypt:dev
+    ports:
+      - "3000:3000"
+    networks:
+      - uxie-net
+networks:
+  uxie-net:
+    driver: bridge
