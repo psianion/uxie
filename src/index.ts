@@ -6,6 +6,7 @@ import { parseEnv } from "./lib/env.ts";
 import { log } from "./lib/log.ts";
 import { createDiscordClient } from "./bot/client.ts";
 import { handleInteraction } from "./bot/interaction-router.ts";
+import { handleMessage } from "./bot/message-router.ts";
 import { buildScryptModule } from "./integrations/scrypt/index.ts";
 
 process.on("uncaughtException", (err) => {
@@ -35,6 +36,12 @@ client.once(Events.ClientReady, (c) => {
 
 client.on(Events.InteractionCreate, async (i) => {
   await handleInteraction(i, scrypt.commands, env.DISCORD_OWNER_ID);
+});
+
+// #inbox passive capture (Design §6.2). message-router is catch site #2 (decision 10): it
+// gates (owner / not-bot / inbox channel / non-empty) and never lets a handler fault escape.
+client.on(Events.MessageCreate, async (m) => {
+  await handleMessage(m, { ownerId: env.DISCORD_OWNER_ID, inboxId: env.INBOX_CHANNEL_ID }, scrypt.onInbox);
 });
 
 // Stateless shutdown (decision 16): no caches/queues/scheduler to drain — just close the

@@ -1,8 +1,16 @@
-// Scrypt REST client. v1 write path is POST /api/ingest (added in Wave 2); this
-// wave introduces only health(). Auth is Bearer ${SCRYPT_AUTH} (scrypt-contract §0);
-// REST calls that carry an interaction send X-Correlation-Id: <client_tag> for tracing
-// (scrypt-contract §0). Timeouts via AbortSignal.timeout: 10s default, 500ms for the
-// /ping health probe (ratified decision 5).
+// Scrypt REST client. v1 write path is POST /api/ingest (added in Wave 2).
+// Auth is Bearer ${SCRYPT_AUTH} (scrypt-contract §0); REST calls that carry an
+// interaction send X-Correlation-Id: <client_tag> for tracing (scrypt-contract §0/§1.1).
+// Timeouts via AbortSignal.timeout: 10s default for ingest, 500ms for the /ping health
+// probe (ratified decision 5).
+//
+// IMPORTANT (contract vs plan): the deterministic client_tag is the X-Correlation-Id
+// HEADER value, NOT a body field (scrypt-contract §1.1). The wire body is the
+// contract-shaped { kind, title, content, frontmatter?, replace? }; success is 201 and
+// returns { path, kind, created, side_effects? }. ingest() adapts that to the uxie-facing
+// { path, permalink } shape (Design §5/§6.1), deriving the web-UI permalink from the path
+// (scrypt-contract §3) and degrading to the raw path if no base URL is available.
+import { z } from "zod";
 import { ScryptError } from "../../lib/errors.ts";
 
 export type HealthReason = "unreachable" | "auth" | "server" | "timeout";
@@ -10,6 +18,58 @@ export type HealthReason = "unreachable" | "auth" | "server" | "timeout";
 export interface HealthResult {
   ok: boolean;
   reason?: HealthReason;
+}
+
+// uxie-facing ingest params (Design §5). `clientTag` becomes the X-Correlation-Id header
+// (scrypt-contract §1.1) — it is NOT placed in the body. `tz` is accepted for callers that
+// want it but the server ignores tz for journal (scrypt-contract BLOCKER 1); /journal
+// prepends local time into `content` instead.
+export interface IngestParams {
+  kind: string;
+  content: string;
+  clientTag: string;
+  tz?: string;
+  meta?: Record<string, unknown>;
+}
+
+// uxie-facing result (Design §5/§6.1). `permalink` is derived locally from the path.
+export interface IngestResult {
+  path: string;
+  permalink: string;
+}
+
+// Contract success body (scrypt-contract §1.1 / §1.6). Parsed, never cast.
+const IngestResponse = z.object({
+  path: z.string(),
+  kind: z.string(),
+  created: z.boolean(),
+  side_effects: z
+    .object({
+      thread_updated: z.string().optional(),
+      research_run_id: z.number().optional(),
+    })
+    .optional(),
+});
+
+const JOURNAL_KIND = "journal";
+const MAX_TITLE = 120;
+
+// Derive the required contract `title` from content for non-journal kinds (the contract
+// requires title.min(1) but ignores it for journal). First non-empty line, trimmed/capped.
+function deriveTitle(content: string): string {
+  const firstLine = content.split("\n").find((l) => l.trim().length > 0) ?? content;
+  const trimmed = firstLine.trim();
+  const t = trimmed.length > MAX_TITLE ? trimmed.slice(0, MAX_TITLE) : trimmed;
+  return t.length > 0 ? t : "untitled";
+}
+
+// Web-UI permalink from a vault-relative path (scrypt-contract §3): strip trailing .md and
+// join to the base URL. Presumed scheme (flagged BLOCKER in the contract) — degrade to the
+// raw path when no base URL is configured so the embed always has something to show.
+function toPermalink(baseUrl: string, path: string): string {
+  const noExt = path.endsWith(".md") ? path.slice(0, -3) : path;
+  if (!baseUrl) return path;
+  return `${baseUrl.replace(/\/+$/, "")}/${noExt.replace(/^\/+/, "")}`;
 }
 
 export class ScryptRestClient {
@@ -50,6 +110,53 @@ export class ScryptRestClient {
       }
       return { ok: false, reason: "unreachable" };
     }
+  }
+
+  // The single v1 write primitive — POST /api/ingest (scrypt-contract §1.1). Used by
+  // /capture, /journal, and #inbox. The clientTag rides the X-Correlation-Id header
+  // (decision 3); the body is contract-shaped. Throws a typed ScryptError on any non-201
+  // so the router's catch site (or the inbox handler) maps it to a user-facing message /
+  // ❌ react — there is no try/catch upstream of here in command bodies (decision 10).
+  async ingest(p: IngestParams): Promise<IngestResult> {
+    const body: Record<string, unknown> = {
+      kind: p.kind,
+      title: deriveTitle(p.content),
+      content: p.content,
+    };
+    if (p.meta !== undefined) body.frontmatter = p.meta;
+    // tz is accepted by uxie but the server ignores it for journal (contract BLOCKER 1);
+    // forward it as frontmatter so it is harmless when ignored and visible otherwise.
+    if (p.tz !== undefined && p.kind !== JOURNAL_KIND) {
+      body.frontmatter = { ...(body.frontmatter as Record<string, unknown> | undefined), tz: p.tz };
+    }
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/api/ingest`, {
+        method: "POST",
+        headers: this.headers(p.clientTag),
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (e) {
+      const name = (e as Error).name;
+      if (name === "TimeoutError") throw new ScryptError("scrypt_timeout", "scrypt timed out", e);
+      throw new ScryptError("scrypt_unreachable", "scrypt unreachable", e);
+    }
+
+    if (res.status === 201 || res.status === 200) {
+      const json = await res.json().catch(() => null);
+      const parsed = IngestResponse.safeParse(json);
+      if (!parsed.success) {
+        throw new ScryptError("scrypt_bad_response", "scrypt returned an unexpected ingest body");
+      }
+      return { path: parsed.data.path, permalink: toPermalink(this.baseUrl, parsed.data.path) };
+    }
+    if (res.status === 401 || res.status === 403)
+      throw new ScryptError("scrypt_auth", "scrypt auth rejected");
+    if (res.status >= 500) throw new ScryptError("scrypt_server", "scrypt server error");
+    const msg = await res.text().catch(() => "");
+    throw new ScryptError("scrypt_bad_request", `scrypt: ${msg || res.statusText}`);
   }
 }
 
