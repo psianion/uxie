@@ -9,6 +9,8 @@ import { buildPingCommand } from "./commands/ping.ts";
 import { buildCaptureCommand } from "./commands/capture.ts";
 import { buildSearchCommand } from "./commands/search.ts";
 import { buildAskCommand } from "./commands/ask.ts";
+import { buildJournalCommand } from "./commands/journal.ts";
+import { buildBriefCommand } from "./commands/brief.ts";
 import { handleInboxMessage } from "./inbox-handler.ts";
 import type { Env } from "../../lib/env.ts";
 import type { Message } from "discord.js";
@@ -31,6 +33,8 @@ export function buildScryptModule(env: Env): ScryptModule {
     buildCaptureCommand(rest),
     buildSearchCommand(mcp),
     buildAskCommand(mcp),
+    buildJournalCommand(rest, env.USER_TZ),
+    buildBriefCommand(rest, env.USER_TZ),
   ];
   return {
     commands: buildCommandCollection(cmds),

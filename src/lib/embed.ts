@@ -16,13 +16,17 @@
 //     pagination (decision 14) — added alongside searchResultEmbed.
 import { AttachmentBuilder, EmbedBuilder } from "discord.js";
 import type { SearchHit, SemanticHit } from "../integrations/scrypt/mcp-client.ts";
+import type { DailyContext } from "../integrations/scrypt/rest-client.ts";
 
 // Single accent color for every uxie embed (decision 14). Discord blurple.
 export const ACCENT = 0x5865f2;
 
 export const TITLE_CAP = 256;
 export const DESC_CAP = 4000; // 4096 theoretical, leave slack
-export const FIELD_CAP = 1000;
+export const FIELD_CAP = 1000; // per-field render budget (Discord hard cap is 1024)
+export const FIELD_VALUE_CAP = 1024; // Discord's absolute field-value limit
+// Placeholder for an empty field value: Discord rejects "" but accepts a non-empty string.
+const EMPTY_FIELD = "_(none)_";
 
 // Top-N cap for the read commands (decision 14): the embed shows at most TOP_N hit lines;
 // anything beyond spills into a single .txt AttachmentBuilder. We NEVER paginate (no
@@ -108,4 +112,49 @@ export function semanticResultPayload(query: string, hits: SemanticHit[]): Resul
     .map((h) => `${h.note_path}\t${h.score.toFixed(2)}\t${h.chunk_text}`)
     .join("\n");
   return { embeds: [embed], files: [overflowFile("ask-results.txt", body)] };
+}
+
+// /brief embed (Design §6.5 / plan Task 25). A classic ephemeral embed (decision 14 — no
+// Components V2) with exactly five fields built from the simplified DailyContext: today's
+// journal, open threads, recent captures, active memories, and the tag cloud. Every field
+// value is non-empty (Discord rejects "") and capped at Discord's hard 1024-char field
+// limit. Pure (no IO): the /brief command body does the editReply. The single ACCENT color
+// (decision 14) is set here so /brief matches every other uxie embed.
+//
+// `date` is the USER_TZ-local "today" (journalDateKey) computed by the command — the title
+// must show the owner's local date, not the bot host's UTC date.
+export function briefEmbed(ctx: DailyContext, date: string): EmbedBuilder {
+  const journalVal = ctx.today_journal ? truncate(ctx.today_journal, FIELD_VALUE_CAP) : EMPTY_FIELD;
+  const threadsVal =
+    ctx.open_threads.length === 0
+      ? EMPTY_FIELD
+      : truncate(
+          ctx.open_threads.slice(0, 5).map((t) => `• [${t.priority}] \`${t.path}\``).join("\n"),
+          FIELD_VALUE_CAP,
+        );
+  const recentVal =
+    ctx.recent_notes.length === 0
+      ? EMPTY_FIELD
+      : truncate(ctx.recent_notes.slice(0, 5).map((n) => `• \`${n.path}\``).join("\n"), FIELD_VALUE_CAP);
+  const memVal =
+    ctx.active_memories.length === 0
+      ? EMPTY_FIELD
+      : truncate(ctx.active_memories.map((m) => m.name).join(", "), FIELD_VALUE_CAP);
+  const tagsVal =
+    ctx.tag_cloud.length === 0
+      ? EMPTY_FIELD
+      : truncate(ctx.tag_cloud.slice(0, 10).map((t) => `\`${t.tag}\`(${t.count})`).join(" "), FIELD_VALUE_CAP);
+
+  return new EmbedBuilder()
+    .setColor(ACCENT)
+    .setTitle(truncate(`Daily brief — ${date}`, TITLE_CAP))
+    .addFields(
+      // Field names carry the lowercase domain keyword (journal/threads/captures/memories/
+      // tags) the /brief tests assert on, with a leading emoji glyph for visual grouping.
+      { name: "📓 journal", value: journalVal },
+      { name: "🧵 threads", value: threadsVal },
+      { name: "📥 captures", value: recentVal },
+      { name: "🧠 memories", value: memVal },
+      { name: "🏷️ tags", value: tagsVal },
+    );
 }

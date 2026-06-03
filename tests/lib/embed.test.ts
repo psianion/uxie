@@ -9,6 +9,7 @@ import {
   semanticResultEmbed,
   searchResultPayload,
   semanticResultPayload,
+  briefEmbed,
 } from "../../src/lib/embed.ts";
 
 describe("truncate", () => {
@@ -135,5 +136,58 @@ describe("result payloads (top-N caps + AttachmentBuilder overflow, never pagina
     const p = semanticResultPayload("q", hits);
     expect(p.files).toBeDefined();
     expect(p.files!.length).toBe(1);
+  });
+});
+
+describe("briefEmbed", () => {
+  const ctx = {
+    today_journal: "morning thoughts",
+    recent_notes: [
+      { path: "a.md", title: "A" },
+      { path: "b.md", title: "B" },
+    ],
+    open_threads: [{ path: "t1.md", title: "T1", priority: "high" }],
+    active_memories: [{ name: "research" }],
+    tag_cloud: [
+      { tag: "x", count: 5 },
+      { tag: "y", count: 3 },
+    ],
+  };
+
+  test("renders title with date and 5 fields", () => {
+    const e = briefEmbed(ctx, "2026-04-14");
+    const json: any = e.toJSON();
+    expect(json.title).toContain("2026-04-14");
+    expect(json.fields.length).toBe(5);
+    const names = json.fields.map((f: any) => f.name);
+    expect(names).toEqual([
+      expect.stringContaining("journal"),
+      expect.stringContaining("threads"),
+      expect.stringContaining("captures"),
+      expect.stringContaining("memories"),
+      expect.stringContaining("tags"),
+    ]);
+  });
+
+  test("sets the single accent color (decision 14)", () => {
+    const e = briefEmbed(ctx, "2026-04-14");
+    expect((e.toJSON() as any).color).toBe(ACCENT);
+  });
+
+  test("handles empty context gracefully", () => {
+    const empty = { today_journal: "", recent_notes: [], open_threads: [], active_memories: [], tag_cloud: [] };
+    const e = briefEmbed(empty, "2026-04-14");
+    const json: any = e.toJSON();
+    expect(json.fields.length).toBe(5);
+    // every empty field degrades to a placeholder, never an empty string (Discord rejects "")
+    for (const f of json.fields) expect(f.value.length).toBeGreaterThan(0);
+  });
+
+  test("caps an oversized journal body to stay within the field cap", () => {
+    const big = { ...ctx, today_journal: "z".repeat(5000) };
+    const e = briefEmbed(big, "2026-04-14");
+    const json: any = e.toJSON();
+    const journalField = json.fields[0];
+    expect(journalField.value.length).toBeLessThanOrEqual(1024);
   });
 });

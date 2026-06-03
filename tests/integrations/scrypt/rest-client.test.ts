@@ -265,3 +265,134 @@ describe("ScryptRestClient.ingest", () => {
     }
   });
 });
+
+// scrypt-contract §1.2: GET /api/daily_context drives /brief. The body is zod-parsed and
+// projected to the uxie-facing simplified DailyContext (decision 2: parse, never cast).
+// The tolerant parser accepts BOTH the simplified flat shape (used here / by /brief tests)
+// AND the authoritative nested contract shape (today.journal.content, rich rows).
+describe("ScryptRestClient.getDailyContext", () => {
+  test("GETs /api/daily_context and returns parsed body (flat shape)", async () => {
+    const payload = {
+      today_journal: "morning",
+      recent_notes: [{ path: "a.md", title: "A" }],
+      open_threads: [{ path: "t.md", title: "T", priority: "high" }],
+      active_memories: [{ name: "m" }],
+      tag_cloud: [{ tag: "x", count: 3 }],
+    };
+    const restore = withFetch(async () => new Response(JSON.stringify(payload), { status: 200 }));
+    try {
+      const out = await client().getDailyContext();
+      expect(out.today_journal).toBe("morning");
+      expect(out.recent_notes[0]?.path).toBe("a.md");
+      expect(out.open_threads[0]?.priority).toBe("high");
+      expect(out.active_memories[0]?.name).toBe("m");
+      expect(out.tag_cloud[0]).toEqual({ tag: "x", count: 3 });
+    } finally {
+      restore();
+    }
+  });
+
+  test("maps the authoritative nested contract shape to the simplified DailyContext", async () => {
+    // scrypt-contract §1.6 DailyContextResponse: nested today.journal + rich rows.
+    const payload = {
+      generated_at: "2026-06-03T00:00:00.000Z",
+      today: { date: "2026-06-03", journal: { path: "journal/2026-06-03.md", content: "09:00 hi", exists: true } },
+      recent_notes: [
+        { path: "n.md", title: "N", modified: "2026-06-03T00:00:00.000Z", tags: ["x"], snippet: "s" },
+      ],
+      open_threads: [
+        { slug: "t", title: "T", status: "open", priority: 5, last_run: null, prompt: null, path: "notes/threads/t.md" },
+      ],
+      active_memories: [
+        { slug: "m", title: "Mem", category: "c", priority: 9, content: "body" },
+      ],
+      tag_cloud: [{ tag: "x", count: 3 }],
+      related: { notes: [], memories: [], draft_prompts: [] },
+    };
+    const restore = withFetch(async () => new Response(JSON.stringify(payload), { status: 200 }));
+    try {
+      const out = await client().getDailyContext();
+      expect(out.today_journal).toBe("09:00 hi");
+      expect(out.recent_notes[0]?.path).toBe("n.md");
+      // numeric contract priority is stringified for the simplified shape
+      expect(out.open_threads[0]?.priority).toBe("5");
+      expect(out.open_threads[0]?.path).toBe("notes/threads/t.md");
+      // active memory `title` projects into the simplified `name`
+      expect(out.active_memories[0]?.name).toBe("Mem");
+      expect(out.tag_cloud[0]).toEqual({ tag: "x", count: 3 });
+    } finally {
+      restore();
+    }
+  });
+
+  test("issues a GET with bearer auth and a 10s AbortSignal", async () => {
+    let capturedUrl = "";
+    let capturedInit: RequestInit | undefined;
+    const restore = withFetch(async (url, init) => {
+      capturedUrl = String(url);
+      capturedInit = init;
+      return new Response(JSON.stringify({ today_journal: "", recent_notes: [], open_threads: [], active_memories: [], tag_cloud: [] }), { status: 200 });
+    });
+    try {
+      await client().getDailyContext();
+      expect(capturedUrl).toBe("http://scrypt:3000/api/daily_context");
+      expect(capturedInit?.method).toBe("GET");
+      const headers = capturedInit?.headers as Record<string, string>;
+      expect(headers["Authorization"]).toBe("Bearer bearer");
+      expect(capturedInit?.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      restore();
+    }
+  });
+
+  test("maps 401 to ScryptError(scrypt_auth)", async () => {
+    const restore = withFetch(async () => new Response("", { status: 401 }));
+    try {
+      await expect(client().getDailyContext()).rejects.toMatchObject({ code: "scrypt_auth" });
+    } finally {
+      restore();
+    }
+  });
+
+  test("maps 500 to ScryptError(scrypt_server)", async () => {
+    const restore = withFetch(async () => new Response("", { status: 500 }));
+    try {
+      await expect(client().getDailyContext()).rejects.toMatchObject({ code: "scrypt_server" });
+    } finally {
+      restore();
+    }
+  });
+
+  test("maps network refusal to ScryptError(scrypt_unreachable)", async () => {
+    const restore = withFetch(async () => {
+      throw new TypeError("fetch failed");
+    });
+    try {
+      await expect(client().getDailyContext()).rejects.toMatchObject({ code: "scrypt_unreachable" });
+    } finally {
+      restore();
+    }
+  });
+
+  test("maps AbortSignal timeout to ScryptError(scrypt_timeout)", async () => {
+    const restore = withFetch(async () => {
+      const e: any = new Error("t");
+      e.name = "TimeoutError";
+      throw e;
+    });
+    try {
+      await expect(client().getDailyContext()).rejects.toMatchObject({ code: "scrypt_timeout" });
+    } finally {
+      restore();
+    }
+  });
+
+  test("rejects an unparseable success body with ScryptError(scrypt_bad_response)", async () => {
+    const restore = withFetch(async () => new Response(JSON.stringify({ recent_notes: "not-an-array" }), { status: 200 }));
+    try {
+      await expect(client().getDailyContext()).rejects.toMatchObject({ code: "scrypt_bad_response" });
+    } finally {
+      restore();
+    }
+  });
+});
