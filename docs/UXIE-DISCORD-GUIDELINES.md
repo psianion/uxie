@@ -396,12 +396,13 @@ USER_TZ                    // IANA tz, e.g. "Asia/Kolkata"
 ### 17.3 Owner gate
 
 ```ts
-function requireOwner(i: BaseInteraction, ownerId: string) {
-  if (i.user.id !== ownerId) throw new NotOwnerError(`rejected user ${i.user.id}`);
+// src/lib/auth.ts
+function assertOwner(actorId: string, ownerId: string) {
+  if (actorId !== ownerId) throw new NotOwnerError(`rejected user ${actorId}`);
 }
 ```
 
-First line of every `execute`. No exceptions.
+**Router-located, not in command bodies.** `assertOwner` fires inside `bot/interaction-router.ts` and `bot/message-router.ts` BEFORE `deferReply`/`execute` — so a non-owner is rejected before any work and the command body never re-checks. The non-owner pre-defer path replies "not for you" ephemerally (`reply`, not `editReply`).
 
 ---
 
