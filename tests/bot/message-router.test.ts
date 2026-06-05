@@ -2,50 +2,49 @@ import { describe, expect, test, mock } from "bun:test";
 import { handleMessage } from "../../src/bot/message-router.ts";
 import { fakeMessage } from "../helpers.ts";
 
-describe("handleMessage", () => {
-  const cfg = { ownerId: "123", inboxId: "inbox-chan" };
+describe("handleMessage (owner mention gate)", () => {
+  const cfg = { ownerId: "123" };
 
-  test("ignores bot messages", async () => {
-    const handler = mock(async () => {});
-    const msg = fakeMessage({ author: { id: "123", bot: true } });
-    await handleMessage(msg, cfg, handler);
-    expect(handler).not.toHaveBeenCalled();
+  test("ignores bot authors", async () => {
+    const onMention = mock(async () => {});
+    await handleMessage(fakeMessage({ author: { id: "123", bot: true }, mentionsBot: true }), cfg, onMention);
+    expect(onMention).not.toHaveBeenCalled();
   });
 
-  test("ignores non-owner messages", async () => {
-    const handler = mock(async () => {});
-    const msg = fakeMessage({ author: { id: "999", bot: false } });
-    await handleMessage(msg, cfg, handler);
-    expect(handler).not.toHaveBeenCalled();
+  test("ignores non-owner authors even when they mention uxie", async () => {
+    const onMention = mock(async () => {});
+    await handleMessage(fakeMessage({ author: { id: "999", bot: false }, mentionsBot: true }), cfg, onMention);
+    expect(onMention).not.toHaveBeenCalled();
   });
 
-  test("ignores messages outside inbox channel", async () => {
-    const handler = mock(async () => {});
-    const msg = fakeMessage({ channelId: "other" });
-    await handleMessage(msg, cfg, handler);
-    expect(handler).not.toHaveBeenCalled();
+  test("ignores owner messages that do not mention uxie", async () => {
+    const onMention = mock(async () => {});
+    await handleMessage(fakeMessage({ author: { id: "123", bot: false }, mentionsBot: false }), cfg, onMention);
+    expect(onMention).not.toHaveBeenCalled();
   });
 
-  test("ignores empty / whitespace-only messages", async () => {
-    const handler = mock(async () => {});
-    const msg = fakeMessage({ content: "   " });
-    await handleMessage(msg, cfg, handler);
-    expect(handler).not.toHaveBeenCalled();
+  test("invokes onMention for an owner direct-mention", async () => {
+    const onMention = mock(async () => {});
+    await handleMessage(fakeMessage({ author: { id: "123", bot: false }, mentionsBot: true }), cfg, onMention);
+    expect(onMention).toHaveBeenCalledTimes(1);
   });
 
-  test("calls handler on a valid owner inbox message", async () => {
-    const handler = mock(async () => {});
-    const msg = fakeMessage();
-    await handleMessage(msg, cfg, handler);
-    expect(handler).toHaveBeenCalledWith(msg);
+  test("does nothing before the client is READY (no client.user)", async () => {
+    const onMention = mock(async () => {});
+    await handleMessage(
+      fakeMessage({ author: { id: "123", bot: false }, mentionsBot: true, client: { user: null } }),
+      cfg,
+      onMention,
+    );
+    expect(onMention).not.toHaveBeenCalled();
   });
 
   test("catch site: a throwing handler never escapes handleMessage", async () => {
-    const handler = mock(async () => {
-      throw new Error("ingest blew up");
+    const onMention = mock(async () => {
+      throw new Error("handler blew up");
     });
-    const msg = fakeMessage();
-    // Must resolve, not reject — message-router is catch site #2 (decision 10).
-    await expect(handleMessage(msg, cfg, handler)).resolves.toBeUndefined();
+    await expect(
+      handleMessage(fakeMessage({ author: { id: "123", bot: false }, mentionsBot: true }), cfg, onMention),
+    ).resolves.toBeUndefined();
   });
 });

@@ -1,7 +1,7 @@
-// scrypt module entry. Builds the REST client from validated env, the command collection
-// (/ping + /capture in Wave 2), and the #inbox handler. The module owns its clients and
-// commands; the boot path only calls buildScryptModule and wires the resulting collection
-// into the interaction-router and the onInbox callback into the message-router.
+// scrypt module entry. Builds the REST + MCP clients from validated env and the command
+// collection. The module owns its clients and commands; the boot path wires the command
+// collection into the interaction-router. Message handling (owner @-mention) lives in
+// bot-core (mention-handler), not here.
 import { buildCommandCollection, type LoadedCommand } from "../../bot/command-loader.ts";
 import { ScryptRestClient } from "./rest-client.ts";
 import { ScryptMcpClient } from "./mcp-client.ts";
@@ -11,16 +11,12 @@ import { buildSearchCommand } from "./commands/search.ts";
 import { buildAskCommand } from "./commands/ask.ts";
 import { buildJournalCommand } from "./commands/journal.ts";
 import { buildBriefCommand } from "./commands/brief.ts";
-import { handleInboxMessage } from "./inbox-handler.ts";
 import type { Env } from "../../lib/env.ts";
-import type { Message } from "discord.js";
-import { log } from "../../lib/log.ts";
 
 export interface ScryptModule {
   commands: ReturnType<typeof buildCommandCollection>;
   rest: ScryptRestClient;
   mcp: ScryptMcpClient;
-  onInbox: (msg: Message) => Promise<void>;
 }
 
 export function buildScryptModule(env: Env): ScryptModule {
@@ -40,6 +36,5 @@ export function buildScryptModule(env: Env): ScryptModule {
     commands: buildCommandCollection(cmds),
     rest,
     mcp,
-    onInbox: (msg) => handleInboxMessage(msg, rest, log),
   };
 }
