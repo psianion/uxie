@@ -191,10 +191,10 @@ export class ScryptRestClient {
   }
 
   // The single v1 write primitive — POST /api/ingest (scrypt-contract §1.1). Used by
-  // /capture, /journal, and #inbox. The clientTag rides the X-Correlation-Id header
+  // /capture and /journal. The clientTag rides the X-Correlation-Id header
   // (decision 3); the body is contract-shaped. Throws a typed ScryptError on any non-201
-  // so the router's catch site (or the inbox handler) maps it to a user-facing message /
-  // ❌ react — there is no try/catch upstream of here in command bodies (decision 10).
+  // so the interaction-router's catch site maps it to a user-facing ephemeral message —
+  // there is no try/catch upstream of here in command bodies (decision 10).
   async ingest(p: IngestParams): Promise<IngestResult> {
     const body: Record<string, unknown> = {
       kind: p.kind,
