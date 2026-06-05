@@ -114,6 +114,25 @@ export function semanticResultPayload(query: string, hits: SemanticHit[]): Resul
   return { embeds: [embed], files: [overflowFile("ask-results.txt", body)] };
 }
 
+// Help overview shown when the owner @-mentions uxie (mention-trigger spec). Pure: takes a
+// flat command summary list, returns one classic embed. The list is derived by the caller
+// from the registered command collection so this never drifts from the real command set.
+export interface CommandSummary {
+  name: string;
+  description: string;
+}
+
+export function helpEmbed(commands: CommandSummary[]): EmbedBuilder {
+  const lines = commands.map((c) => `\`/${c.name}\` — ${c.description || "—"}`);
+  return new EmbedBuilder()
+    .setColor(ACCENT)
+    .setTitle("uxie — commands")
+    .setDescription(lines.length ? lines.join("\n") : "_(no commands registered)_")
+    .setFooter({
+      text: "Tag me with a request soon and I'll route it. For now, use the slash commands above.",
+    });
+}
+
 // /brief embed (Design §6.5 / plan Task 25). A classic ephemeral embed (decision 14 — no
 // Components V2) with exactly five fields built from the simplified DailyContext: today's
 // journal, open threads, recent captures, active memories, and the tag cloud. Every field

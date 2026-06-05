@@ -10,6 +10,7 @@ import {
   searchResultPayload,
   semanticResultPayload,
   briefEmbed,
+  helpEmbed,
 } from "../../src/lib/embed.ts";
 
 describe("truncate", () => {
@@ -189,5 +190,24 @@ describe("briefEmbed", () => {
     const json: any = e.toJSON();
     const journalField = json.fields[0];
     expect(journalField.value.length).toBeLessThanOrEqual(1024);
+  });
+});
+
+describe("helpEmbed", () => {
+  test("lists each command as `/name` — description with the accent color", () => {
+    const e = helpEmbed([
+      { name: "ping", description: "Check uxie + scrypt health" },
+      { name: "capture", description: "Save a note to scrypt" },
+    ]);
+    expect(e.data.color).toBe(ACCENT);
+    expect(e.data.title).toBe("uxie — commands");
+    expect(e.data.description).toContain("`/ping` — Check uxie + scrypt health");
+    expect(e.data.description).toContain("`/capture` — Save a note to scrypt");
+    expect(e.data.footer?.text).toContain("route it");
+  });
+
+  test("renders without throwing when the command list is empty", () => {
+    const e = helpEmbed([]);
+    expect(e.data.description).toContain("no commands");
   });
 });
