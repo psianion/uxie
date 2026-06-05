@@ -121,8 +121,9 @@ Remove `INBOX_CHANNEL_ID` (the schema field on line 13 and the example entry).
 
 ### Incidental cleanup (no dead code left behind)
 - `src/lib/client-tag.ts`: `makeMessageClientTag` (the `uxie-msg-<id>` tag) is
-  used **only** by `inbox-handler`. After deletion it is orphaned — remove it
-  (and its test, if any). `makeClientTag` (interaction tag) stays.
+  used only by `inbox-handler` today, but the next phase (mention → Scrypt
+  writes) will need a message-scoped client tag. **Retain it** (and its test) as
+  the seam for that path rather than churning it out and back in.
 - Sweep stale `#inbox` references in comments/docs so they don't mislead:
   `src/bot/message-router.ts` header, `src/bot/client.ts` header, `src/index.ts`
   comments, `src/integrations/scrypt/index.ts` header, `src/lib/auth.ts` comment,
