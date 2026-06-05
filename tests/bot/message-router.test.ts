@@ -47,4 +47,18 @@ describe("handleMessage (owner mention gate)", () => {
       handleMessage(fakeMessage({ author: { id: "123", bot: false }, mentionsBot: true }), cfg, onMention),
     ).resolves.toBeUndefined();
   });
+
+  // We can't unit-test discord.js's own mention resolution, but we CAN assert the gate
+  // asks for the right exclusions — so an @everyone / role / replied-user ping is never
+  // treated as a direct mention of uxie (spec §2).
+  test("checks the mention with the @everyone/role/replied-user exclusions", async () => {
+    const onMention = mock(async () => {});
+    const msg = fakeMessage({ author: { id: "123", bot: false }, mentionsBot: true });
+    await handleMessage(msg, cfg, onMention);
+    expect(msg.mentions.has).toHaveBeenCalledWith("bot-1", {
+      ignoreEveryone: true,
+      ignoreRoles: true,
+      ignoreRepliedUser: true,
+    });
+  });
 });
