@@ -1,7 +1,7 @@
 // Owner allowlist guard (ratified decision 9). assertOwner is ROUTER-LOCATED:
 // it fires inside interaction-router AND message-router BEFORE deferReply/execute,
 // never inside command bodies. Works for both Interaction (user.id) and Message
-// (author.id) shapes so a single guard covers slash commands and #inbox capture.
+// (author.id) shapes so a single guard covers slash commands and the owner @-mention path.
 import { NotOwnerError } from "./errors.ts";
 
 type Actor = { user?: { id: string } } | { author?: { id: string } };

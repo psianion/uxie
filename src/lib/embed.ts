@@ -46,7 +46,7 @@ function asHttpUrl(permalink: string): string | undefined {
   return /^https?:\/\//i.test(permalink) ? permalink : undefined;
 }
 
-// /capture + #inbox success embed (Design §6.1). Shows the vault path and the permalink;
+// /capture success embed (Design §6.1). Shows the vault path and the permalink;
 // title links to the web UI when available.
 export function captureEmbed(r: { path: string; permalink: string }): EmbedBuilder {
   const url = asHttpUrl(r.permalink);
