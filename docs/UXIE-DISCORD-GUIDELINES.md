@@ -58,6 +58,7 @@ A plane violation is a blocker, not a nit.
 
 - **One bot application.** No multi-bot fan-out. Future channels (Slack, Telegram) get their own translation layer; Uxie stays Discord-only.
 - **Install type:** `GuildInstall` to your single dev guild during v1. Add `UserInstall` only when a clear need shows up (e.g., DMing the bot from anywhere).
+- **Permissions:** invited with **Administrator** (`permissions=8`). Uxie is a personal, owner-only bot expected to grow to handle everything (including future Para-RAID ops). The security gate is enforced in code via the owner id check, not Discord permission bits.
 - **Owner gate:** every interaction handler must check `interaction.user.id === env.DISCORD_OWNER_ID` before doing work. Non-owner → ephemeral "not authorized" reply, no logging beyond `level: warn` with the rejected user id.
 - **Public surface = zero.** Bot does not respond to anyone but the owner. No "help everyone" pattern.
 
@@ -65,17 +66,19 @@ A plane violation is a blocker, not a nit.
 
 ## 5. Gateway intents — minimum, with v1.5 path
 
+**These intents are UNCHANGED** from the original `#inbox`-era design; only the `messageCreate` handler logic changed (from inbox-channel gate to owner @-mention gate).
+
 ```ts
-// v1 — slash-only + #inbox channel passive capture
+// v1 — slash commands + owner @-mention server-wide
 intents: [
   GatewayIntentBits.Guilds,           // required for interactionCreate
-  GatewayIntentBits.GuildMessages,    // receive messageCreate in #inbox
+  GatewayIntentBits.GuildMessages,    // receive messageCreate for owner @-mention
   GatewayIntentBits.MessageContent,   // PRIVILEGED — must enable in dev portal
 ],
 partials: [Partials.Channel, Partials.Message],
 ```
 
-- **Drop `DirectMessages` from v1.** All capture happens in slash commands or the `#inbox` channel. DMs add an attack surface and another partial.
+- **Drop `DirectMessages` from v1.** All capture happens in slash commands; the owner @-mention handler is guild-only. DMs add an attack surface and another partial.
 - **`MessageContent` is privileged but free** for unverified bots (<100 guilds). Enable in the Discord Developer Portal once.
 - **Do not add `GuildMembers`.** Single-user bot doesn't need member events.
 - **Adding intents requires a doc bump here.** The privileged-intent set is part of the bot's security posture.
@@ -137,7 +140,7 @@ new SlashCommandBuilder()
 
 ### 6.6 Context-menu commands
 
-- Right-click "Capture to Scrypt" on any message is a future delight. v1 ships slash + `#inbox` only.
+- Right-click "Capture to Scrypt" on any message is a future delight. v1 ships slash commands + owner @-mention only.
 
 ---
 
@@ -193,15 +196,14 @@ await interaction.editReply({
 
 ---
 
-## 9. `#inbox` channel passive capture
+## 9. Owner @-mention trigger
 
-The drop folder pattern, but Discord-side.
+Server-wide, owner-only mention handling via `messageCreate`.
 
-- Single hardcoded channel id from `env.INBOX_CHANNEL_ID`.
-- `messageCreate` handler: if `msg.author.id !== env.DISCORD_OWNER_ID` → ignore. If `msg.channel.id !== env.INBOX_CHANNEL_ID` → ignore. Otherwise → forward to Scrypt's `/api/ingest?kind=inbox` with `client_tag = msg.id` for idempotency.
-- Acknowledge with a single emoji reaction (✅ on success, ❌ on failure). No reply messages. Inbox is fire-and-forget.
-- **Sanitize before forwarding.** Strip Discord codeblocks of shell command markers (anything starting with `$ ` or `# ` inside ``` blocks gets quote-stripped) — defense against accidental ops-shaped strings being interpreted by future tooling.
-- Files attached to inbox messages: download via Bun's `fetch`, forward as multipart to Scrypt's ingest. Skip if Scrypt rejects mime type.
+- `messageCreate` handler: if the message is not a direct bot mention (`msg.mentions.has(client.user)`) → ignore. If the mention is `@everyone` or a role ping → ignore. If `msg.author.id !== env.DISCORD_OWNER_ID` → ignore silently.
+- On a valid owner @-mention: reply in-channel with a help overview embed listing all six commands (`/ping`, `/capture`, `/search`, `/ask`, `/journal`, `/brief`), then delete that reply after ~30s using a transient `setTimeout`. No state is retained.
+- There is no dedicated `#inbox` channel. Note capture uses the `/capture` slash command.
+- **Future:** this handler becomes an agentic parser that interprets the owner's free-text message and routes it to the appropriate command or module.
 
 ---
 
@@ -265,7 +267,7 @@ src/
 - Endpoint: `POST {SCRYPT_SERVER_URL}/api/ingest`
 - Auth: `Authorization: Bearer ${SCRYPT_AUTH}` over Tailscale (TCP).
 - Body shape (per `/scrypt/src/server/api/ingest.ts`): `{ kind, content, client_tag, ...kindSpecific }`.
-- **Every write carries a `client_tag`.** v1 uses a deterministic tag: `uxie-<interaction.id>` for slash commands, `uxie-msg-<msg.id>` for `#inbox`. The same value is the log scope field and `X-Correlation-Id`. Scrypt is idempotent on `client_tag`.
+- **Every write carries a `client_tag`.** v1 uses a deterministic tag: `uxie-<interaction.id>` for slash commands; the `uxie-msg-<msg.id>` form (via the retained `makeMessageClientTag` helper) is reserved for owner @-mention-originated Scrypt writes (the future agentic path). The same value is the log scope field and `X-Correlation-Id`. Scrypt is idempotent on `client_tag`.
 - **Path/slug ownership stays with Scrypt.** Uxie does not pass `path` or `slug`.
 - Timeout: **10s default** for all Scrypt REST/MCP calls (per Design §304); the lightweight `/ping` health probe uses **500ms**. Over budget → `ScryptTimeoutError` → user-friendly ephemeral reply.
 
@@ -345,13 +347,13 @@ All ephemeral. Never expose stack traces to Discord.
 
 - **No in-memory caches** of vault content, search results, or user state across interactions.
 - **No on-disk storage** outside what Bun and discord.js need (the gateway sequence file).
-- **No queue.** A capture either succeeds or fails. Failed `#inbox` messages get ❌; the user can re-drop. Future improvement: failed-inbox bucket on Scrypt, but that's a Scrypt feature, not Uxie.
+- **No queue.** A capture either succeeds or fails via `/capture`; the user can retry.
 - **No scheduler.** Cron lives in Para-RAID.
+- **Carve-out:** the owner @-mention help reply uses a `~30s setTimeout` to self-delete. This is a transient UX timer scoped to a single Discord message object — not a scheduler, queue, or cron. It holds no application state and does not survive a restart.
 
 If Scrypt is down for 10 minutes, Uxie should:
 - Stay connected to Discord (keep gateway open).
 - Reply "scrypt is down" to slash commands.
-- React ❌ to `#inbox` messages.
 - Surface the state in `/ping`.
 - **Not** crash, restart, or accumulate work. Just keep saying no until Scrypt comes back.
 
@@ -380,7 +382,6 @@ DISCORD_BOT_TOKEN          // from Developer Portal
 DISCORD_APP_ID             // application id
 DISCORD_DEV_GUILD_ID       // your test guild
 DISCORD_OWNER_ID           // your user id — owner gate
-INBOX_CHANNEL_ID           // #inbox channel id
 SCRYPT_SERVER_URL          // e.g. http://scrypt.tail-xxxx.ts.net:3000
 SCRYPT_MCP_URL             // e.g. http://scrypt.tail-xxxx.ts.net:3000/mcp
 SCRYPT_AUTH                // bearer token, 32-byte hex
@@ -424,7 +425,7 @@ function assertOwner(actorId: string, ownerId: string) {
   1. Boot uxie locally against a real bot token.
   2. `/ping` → degraded if Scrypt down, healthy otherwise.
   3. `/capture` → note appears in vault.
-  4. Drop a message in `#inbox` → ✅ reaction, note in vault.
+  4. @-mention uxie in any channel → help overview reply appears, auto-deletes after ~30s.
   5. `/search`, `/ask`, `/journal`, `/brief` each return non-empty embeds.
 
 Smoke is documented in `docs/superpowers/specs/2026-04-14-uxie-design.md` §8.4.
@@ -498,3 +499,4 @@ After v1: open the v1.5 list — modals for `/journal`, autocomplete for `/searc
 ## 24. Revision log
 
 - 2026-04-26 — Initial draft. Locks v1 conventions: Bun + discord.js@^14.26, slash-first, owner-gated, stateless, two-client-per-module, three error catch-sites, ephemeral-by-default, `#inbox` passive capture, classic embeds primary with Components V2 as upgrade path.
+- 2026-06-05 — Pivot to server-wide, owner-only, @-mention trigger. A mention returns a help overview (auto-deletes ~30s); agentic intent-routing is a later phase. Install profile is now Administrator. Removed the #inbox channel and INBOX_CHANNEL_ID; note capture stays via /capture.
