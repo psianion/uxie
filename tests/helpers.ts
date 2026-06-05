@@ -23,15 +23,20 @@ export function fakeInteraction(overrides: Record<string, unknown> = {}): any {
   };
 }
 
-// Fake Message for #inbox capture tests (Wave 2). react() is mocked so the capture
-// path's reaction acknowledgement is observable.
+// Fake Message for router + mention tests. Defaults match a valid owner message. Pass
+// `mentionsBot: true` to make `mentions.has(...)` return true, and `clientUserId` to set the
+// bot's own id. `react` and `reply` are mocked so handler acknowledgements are observable.
 export function fakeMessage(overrides: Record<string, unknown> = {}): any {
+  const { mentionsBot = false, clientUserId = "bot-1", ...rest } = overrides as any;
   return {
     id: "mid-1",
     content: "hello world",
     channelId: "inbox-chan",
     author: { id: "123", bot: false },
+    client: { user: { id: clientUserId } },
+    mentions: { has: mock((_id: string, _opts?: unknown) => mentionsBot) },
     react: mock(async (_: string) => {}),
-    ...overrides,
+    reply: mock(async (_: unknown) => ({ delete: mock(async () => {}) })),
+    ...rest,
   };
 }
