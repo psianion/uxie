@@ -5,3 +5,5 @@ bun.lockb
 *.log
 .DS_Store
 node-compile-cache
+docs
+.claude

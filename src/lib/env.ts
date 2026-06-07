@@ -10,7 +10,6 @@ const schema = z.object({
   DISCORD_APP_ID: z.string().min(1),
   DISCORD_DEV_GUILD_ID: z.string().min(1),
   DISCORD_OWNER_ID: z.string().min(1),
-  USER_TZ: z.string().min(1),
   SCRYPT_SERVER_URL: z.string().url(),
   SCRYPT_MCP_URL: z.string().url(),
   SCRYPT_AUTH: z.string().min(1),

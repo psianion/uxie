@@ -6,7 +6,6 @@ const complete = {
   DISCORD_APP_ID: "a",
   DISCORD_DEV_GUILD_ID: "g",
   DISCORD_OWNER_ID: "o",
-  USER_TZ: "Asia/Kolkata",
   SCRYPT_SERVER_URL: "http://scrypt:3000",
   SCRYPT_MCP_URL: "http://scrypt:3000/mcp",
   SCRYPT_AUTH: "b",
@@ -16,7 +15,7 @@ describe("parseEnv", () => {
   test("returns a typed object when all vars present", () => {
     const env = parseEnv(complete);
     expect(env.DISCORD_BOT_TOKEN).toBe("t");
-    expect(env.USER_TZ).toBe("Asia/Kolkata");
+    expect(env.SCRYPT_SERVER_URL).toBe("http://scrypt:3000");
   });
 
   test.each([
@@ -24,7 +23,6 @@ describe("parseEnv", () => {
     "DISCORD_APP_ID",
     "DISCORD_DEV_GUILD_ID",
     "DISCORD_OWNER_ID",
-    "USER_TZ",
     "SCRYPT_SERVER_URL",
     "SCRYPT_MCP_URL",
     "SCRYPT_AUTH",

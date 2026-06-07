@@ -6,8 +6,6 @@ import { parseEnv } from "./lib/env.ts";
 import { log } from "./lib/log.ts";
 import { createDiscordClient } from "./bot/client.ts";
 import { handleInteraction } from "./bot/interaction-router.ts";
-import { handleMessage } from "./bot/message-router.ts";
-import { handleMention } from "./bot/mention-handler.ts";
 import { buildScryptModule } from "./integrations/scrypt/index.ts";
 
 process.on("uncaughtException", (err) => {
@@ -37,14 +35,6 @@ client.once(Events.ClientReady, (c) => {
 
 client.on(Events.InteractionCreate, async (i) => {
   await handleInteraction(i, scrypt.commands, env.DISCORD_OWNER_ID);
-});
-
-// Owner @-mention trigger, server-wide (mention-trigger spec). message-router is catch site
-// #2 (decision 10): it gates (not-bot / owner / direct-mention) and never lets a handler
-// fault escape. For now the mention handler replies with a help overview.
-// The arrow closes over scrypt.commands + log (boot scope); message-router only needs ownerId.
-client.on(Events.MessageCreate, async (m) => {
-  await handleMessage(m, { ownerId: env.DISCORD_OWNER_ID }, (msg) => handleMention(msg, scrypt.commands, log));
 });
 
 // Stateless shutdown (decision 16): no caches/queues/scheduler to drain — just close the
