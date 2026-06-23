@@ -9,8 +9,9 @@ import {
   ScryptBadRequestError,
   UxieError,
 } from "../../src/lib/errors.ts";
-import { fakeInteraction } from "../helpers.ts";
+import { fakeInteraction, fakeButton } from "../helpers.ts";
 import type { LoadedCommand } from "../../src/bot/command-loader.ts";
+import type { ComponentHandler } from "../../src/bot/interaction-router.ts";
 
 function makeCommands(execute: LoadedCommand["execute"]): Collection<string, LoadedCommand> {
   const c = new Collection<string, LoadedCommand>();
@@ -135,5 +136,66 @@ describe("handleInteraction", () => {
     });
     // Must resolve, not reject — the defensive .catch() inside replyWithError swallows it.
     await expect(handleInteraction(i, makeCommands(execute), "123")).resolves.toBeUndefined();
+  });
+});
+
+describe("handleInteraction — buttons", () => {
+  function handlers(handle: ComponentHandler["handle"]): Collection<string, ComponentHandler> {
+    const c = new Collection<string, ComponentHandler>();
+    c.set("ping", { namespace: "ping", handle });
+    return c;
+  }
+
+  test("dispatches an owner button in the dev guild to its namespace handler", async () => {
+    const handle = mock(async () => {});
+    const i = fakeButton();
+    await handleInteraction(i, makeCommands(mock(async () => {})), "123", {
+      components: handlers(handle),
+      devGuildId: "guild-1",
+    });
+    expect(handle).toHaveBeenCalled();
+  });
+
+  test("non-owner button is refused (handler not run)", async () => {
+    const handle = mock(async () => {});
+    const i = fakeButton({ user: { id: "999" } });
+    await handleInteraction(i, makeCommands(mock(async () => {})), "123", {
+      components: handlers(handle),
+      devGuildId: "guild-1",
+    });
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  test("wrong-guild button is refused even for the owner", async () => {
+    const handle = mock(async () => {});
+    const i = fakeButton({ guildId: "other-guild" });
+    await handleInteraction(i, makeCommands(mock(async () => {})), "123", {
+      components: handlers(handle),
+      devGuildId: "guild-1",
+    });
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  test("unknown namespace is ignored", async () => {
+    const handle = mock(async () => {});
+    const i = fakeButton({ customId: "other:thing" });
+    await handleInteraction(i, makeCommands(mock(async () => {})), "123", {
+      components: handlers(handle),
+      devGuildId: "guild-1",
+    });
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  test("a throwing handler never escapes (decision 10)", async () => {
+    const handle = mock(async () => {
+      throw new Error("boom");
+    });
+    const i = fakeButton();
+    await expect(
+      handleInteraction(i, makeCommands(mock(async () => {})), "123", {
+        components: handlers(handle),
+        devGuildId: "guild-1",
+      }),
+    ).resolves.toBeUndefined();
   });
 });

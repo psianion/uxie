@@ -16,9 +16,28 @@ export function fakeInteraction(overrides: Record<string, unknown> = {}): any {
     editReply: mock(async (_: unknown) => {}),
     reply: mock(async (_: unknown) => {}),
     isChatInputCommand: () => true,
+    isButton: () => false,
     options: {
       getString: mock((_: string, _req?: boolean) => "q"),
     },
     ...overrides,
+  };
+}
+
+// Fake ButtonInteraction for router/component tests.
+export function fakeButton(over: Record<string, unknown> = {}): any {
+  return {
+    id: "bid-1",
+    customId: "ping:refresh",
+    user: { id: "123" },
+    guildId: "guild-1",
+    isChatInputCommand: () => false,
+    isButton: () => true,
+    update: mock(async (_: unknown) => {}),
+    deferUpdate: mock(async () => {}),
+    editReply: mock(async (_: unknown) => {}),
+    reply: mock(async (_: unknown) => {}),
+    client: { ws: { ping: 42 } },
+    ...over,
   };
 }

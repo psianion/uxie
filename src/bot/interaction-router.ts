@@ -10,6 +10,7 @@
 // expired interaction) can't escape into the gateway dispatcher.
 import {
   MessageFlags,
+  type ButtonInteraction,
   type ChatInputCommandInteraction,
   type Collection,
   type Interaction,
@@ -26,11 +27,32 @@ interface ScopedLogger {
   error: (m: string, f?: Record<string, unknown>) => void;
 }
 
+// A namespaced button handler. The router owns the owner + dev-guild gate; the handler
+// only runs once those pass. `tuning` lets tests shrink auto-retry delays/attempts.
+export interface ComponentHandler {
+  namespace: string;
+  handle(
+    i: ButtonInteraction,
+    ctx: { log: ScopedLogger },
+    tuning?: { delayMs?: number; maxAttempts?: number },
+  ): Promise<void>;
+}
+
+export interface RouterOpts {
+  components?: Collection<string, ComponentHandler>;
+  devGuildId?: string;
+}
+
 export async function handleInteraction(
   i: Interaction,
   commands: Collection<string, LoadedCommand>,
   ownerId: string,
+  opts: RouterOpts = {},
 ): Promise<void> {
+  if (i.isButton()) {
+    await handleButton(i, ownerId, opts);
+    return;
+  }
   if (!i.isChatInputCommand()) return;
   const cmd = commands.get(i.commandName);
   if (!cmd) return;
@@ -52,6 +74,30 @@ export async function handleInteraction(
     scoped.info("command ok");
   } catch (err) {
     await replyWithError(ci, err, scoped);
+  }
+}
+
+// Owner + dev-guild gated component dispatch (decision 9, extended to buttons). NEVER
+// throws (decision 10): a failing handler is logged and best-effort acknowledged.
+async function handleButton(i: ButtonInteraction, ownerId: string, opts: RouterOpts): Promise<void> {
+  const scoped = log.child({ interactionId: i.id, customId: i.customId });
+  const handlers = opts.components;
+  if (!handlers) return;
+  const namespace = i.customId.split(":")[0] ?? "";
+  const handler = handlers.get(namespace);
+  if (!handler) return;
+  try {
+    assertOwner(i, ownerId); // throws NotOwnerError for a non-owner
+    if (opts.devGuildId && i.guildId !== opts.devGuildId) {
+      throw new NotOwnerError("wrong_guild", "not for you");
+    }
+    await handler.handle(i, { log: scoped });
+  } catch (err) {
+    scoped.warn("component handler error", { err });
+    // Best-effort ack; swallow (e.g. a 10062 expired interaction) so nothing escapes.
+    await i
+      .reply({ content: "couldn't do that", flags: MessageFlags.Ephemeral })
+      .catch(() => {});
   }
 }
 
