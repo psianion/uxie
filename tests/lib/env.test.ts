@@ -35,4 +35,25 @@ describe("parseEnv", () => {
     const partial = { ...complete, SCRYPT_AUTH: undefined } as any;
     expect(() => parseEnv(partial)).toThrow(/SCRYPT_AUTH/);
   });
+
+  test("ALLOW_SCRYPT_RESTART defaults false; SCRYPT_RESTART_CMD defaults to docker compose restart scrypt", () => {
+    const env = parseEnv(complete);
+    expect(env.ALLOW_SCRYPT_RESTART).toBe(false);
+    expect(env.SCRYPT_RESTART_CMD).toBe("docker compose restart scrypt");
+  });
+
+  test("ALLOW_SCRYPT_RESTART parses '1' and 'true' as true", () => {
+    expect(parseEnv({ ...complete, ALLOW_SCRYPT_RESTART: "1" }).ALLOW_SCRYPT_RESTART).toBe(true);
+    expect(parseEnv({ ...complete, ALLOW_SCRYPT_RESTART: "true" }).ALLOW_SCRYPT_RESTART).toBe(true);
+  });
+
+  test("when restart allowed, an invalid SCRYPT_RESTART_CMD fails boot", () => {
+    expect(() =>
+      parseEnv({ ...complete, ALLOW_SCRYPT_RESTART: "1", SCRYPT_RESTART_CMD: "rm -rf /" }),
+    ).toThrow();
+  });
+
+  test("when restart NOT allowed, a weird SCRYPT_RESTART_CMD is ignored (not validated)", () => {
+    expect(() => parseEnv({ ...complete, SCRYPT_RESTART_CMD: "rm -rf /" })).not.toThrow();
+  });
 });

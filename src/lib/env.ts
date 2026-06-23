@@ -4,6 +4,13 @@
 // exactly what to fix and the boot path can log + exit 1.
 import { z } from "zod";
 import { ConfigError } from "./errors.ts";
+import { parseRestartCommand } from "./exec/restart-scrypt.ts";
+
+// Truthy-string → boolean coercion for opt-in flags ("1"/"true" ⇒ true, anything else ⇒ false).
+const bool = z
+  .union([z.boolean(), z.string()])
+  .transform((v) => v === true || v === "1" || v === "true")
+  .pipe(z.boolean());
 
 const schema = z.object({
   DISCORD_BOT_TOKEN: z.string().min(1),
@@ -13,6 +20,8 @@ const schema = z.object({
   SCRYPT_SERVER_URL: z.string().url(),
   SCRYPT_MCP_URL: z.string().url(),
   SCRYPT_AUTH: z.string().min(1),
+  ALLOW_SCRYPT_RESTART: bool.default(false),
+  SCRYPT_RESTART_CMD: z.string().min(1).default("docker compose restart scrypt"),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -23,6 +32,11 @@ export function parseEnv(src: Record<string, string | undefined> = process.env):
     // Surface the failed field name(s) so the boot log + the operator know exactly what to fix.
     const fields = result.error.issues.map((i) => i.path.join(".")).join(", ");
     throw new ConfigError("config", `invalid config — env missing/invalid: ${fields}`, result.error);
+  }
+  // Only validate the restart command when the capability is actually enabled — a disabled
+  // restart never runs, so a malformed command must not block boot.
+  if (result.data.ALLOW_SCRYPT_RESTART) {
+    parseRestartCommand(result.data.SCRYPT_RESTART_CMD); // throws ConfigError on invalid
   }
   return result.data;
 }
