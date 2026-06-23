@@ -11,6 +11,7 @@ export interface PingHandlerOpts {
   version: string;
   scryptHost: string;
   allowRestart: boolean;
+  host: string;
 }
 
 // Injected restart capability. Absent ⇒ the restart actions are inert even if a button id

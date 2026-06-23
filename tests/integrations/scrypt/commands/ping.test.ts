@@ -6,7 +6,7 @@ function fakeRest(health: any) {
   return { health: mock(async () => health) } as any;
 }
 const ctx = { clientTag: "uxie-x", log: { info() {}, warn() {}, error() {} } as any };
-const opts = { version: "0.1.0", scryptHost: "localhost:3777", allowRestart: false };
+const opts = { version: "0.1.0", scryptHost: "localhost:3777", allowRestart: false, host: "local · test-box" };
 
 // /ping replies immediately (no defer). Provide reply/fetchReply/editReply + a client stub.
 function pingInteraction(over: Record<string, unknown> = {}) {

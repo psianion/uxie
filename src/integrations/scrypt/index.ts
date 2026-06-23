@@ -3,6 +3,7 @@
 // collection into the interaction-router. Only /ping is wired today, but the full connection
 // layer (REST write/health + MCP read) is constructed and kept ready for the commands being
 // rebuilt next.
+import { hostname } from "node:os";
 import { Collection } from "discord.js";
 import { buildCommandCollection, type LoadedCommand } from "../../bot/command-loader.ts";
 import type { ComponentHandler } from "../../bot/interaction-router.ts";
@@ -31,6 +32,9 @@ export function buildScryptModule(env: Env): ScryptModule {
     version: VERSION,
     scryptHost: new URL(env.SCRYPT_SERVER_URL).host,
     allowRestart: env.ALLOW_SCRYPT_RESTART,
+    // "<env label> · <machine hostname>" — tells you at a glance whether the responding
+    // instance is local or the VPS (a token holds one live gateway connection at a time).
+    host: `${env.UXIE_ENV} · ${hostname()}`,
   };
 
   const cmds: LoadedCommand[] = [buildPingCommand(rest, pingOpts)];

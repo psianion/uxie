@@ -13,6 +13,7 @@ export interface PingOpts {
   version: string;
   scryptHost: string;
   allowRestart: boolean;
+  host: string;
 }
 
 export function buildPingCommand(rest: ScryptRestClient, opts: PingOpts): LoadedCommand {

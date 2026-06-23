@@ -56,4 +56,9 @@ describe("parseEnv", () => {
   test("when restart NOT allowed, a weird SCRYPT_RESTART_CMD is ignored (not validated)", () => {
     expect(() => parseEnv({ ...complete, SCRYPT_RESTART_CMD: "rm -rf /" })).not.toThrow();
   });
+
+  test("UXIE_ENV defaults to 'local' and passes through a custom label", () => {
+    expect(parseEnv(complete).UXIE_ENV).toBe("local");
+    expect(parseEnv({ ...complete, UXIE_ENV: "vps" }).UXIE_ENV).toBe("vps");
+  });
 });

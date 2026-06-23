@@ -3,7 +3,7 @@ import { ButtonStyle } from "discord.js";
 import { buildPingModel } from "../../../../src/integrations/scrypt/ping/model.ts";
 
 const sys = { heartbeatMs: 42, uptimeSec: 111, roundtripMs: 538 };
-const opts = { version: "0.1.0", scryptHost: "localhost:3777", allowRestart: false };
+const opts = { version: "0.1.0", scryptHost: "localhost:3777", allowRestart: false, host: "vps · prod-box-1" };
 
 describe("buildPingModel", () => {
   test("ok health → green, no recovery buttons", () => {
@@ -48,6 +48,12 @@ describe("buildPingModel", () => {
       { ...opts, allowRestart: true, restarting: true },
     );
     expect(m.buttons!.find((b) => b.id === "ping:restart")!.disabled).toBe(true);
+  });
+
+  test("Host row is first and shows the env label · hostname", () => {
+    const m = buildPingModel({ ok: true, latencyMs: 5 }, sys, opts);
+    expect(m.rows[0]!.label).toBe("Host");
+    expect(m.rows[0]!.value).toBe("vps · prod-box-1");
   });
 
   test("null heartbeat renders n/a and uptime is humanized", () => {

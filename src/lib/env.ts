@@ -22,6 +22,9 @@ const schema = z.object({
   SCRYPT_AUTH: z.string().min(1),
   ALLOW_SCRYPT_RESTART: bool.default(false),
   SCRYPT_RESTART_CMD: z.string().min(1).default("docker compose restart scrypt"),
+  // Deployment label shown in the /ping panel's Host row (e.g. "local", "vps", "prod").
+  // Free-form so any environment name works; defaults to "local".
+  UXIE_ENV: z.string().min(1).default("local"),
 });
 
 export type Env = z.infer<typeof schema>;

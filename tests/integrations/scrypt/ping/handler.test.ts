@@ -4,7 +4,7 @@ import { fakeButton } from "../../../helpers.ts";
 import { createRestartGuard } from "../../../../src/lib/exec/restart-scrypt.ts";
 
 const log = { info() {}, warn() {}, error() {} } as any;
-const opts = { version: "0.1.0", scryptHost: "localhost:3777", allowRestart: false };
+const opts = { version: "0.1.0", scryptHost: "localhost:3777", allowRestart: false, host: "local · test-box" };
 function rest(seq: any[]) {
   const calls = seq.slice();
   return { health: mock(async () => calls.shift() ?? seq[seq.length - 1]) } as any;
@@ -54,7 +54,7 @@ describe("ping component handler", () => {
   });
 });
 
-const allow = { version: "0.1.0", scryptHost: "localhost:3777", allowRestart: true };
+const allow = { version: "0.1.0", scryptHost: "localhost:3777", allowRestart: true, host: "vps · prod-box-1" };
 
 function restartDeps(over: any = {}) {
   return {

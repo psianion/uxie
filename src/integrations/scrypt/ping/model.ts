@@ -24,6 +24,8 @@ export interface PingModelOpts {
   scryptHost: string;
   allowRestart: boolean;
   restarting?: boolean;
+  // Pre-formatted "label · hostname" of the box this instance runs on (e.g. "vps · prod-1").
+  host: string;
 }
 
 // reason → (health bucket, human Scrypt line). ok is handled separately.
@@ -47,6 +49,7 @@ export function buildPingModel(probe: PingProbe, sys: PingSystem, opts: PingMode
     typeof sys.heartbeatMs === "number" && sys.heartbeatMs >= 0 ? `${Math.round(sys.heartbeatMs)} ms` : "n/a";
 
   const rows = [
+    { icon: "🌐", label: "Host", value: opts.host },
     { icon: "⚡", label: "Gateway", value: `connected · ${heartbeat}` },
     { icon: "🗄", label: "Scrypt", value: scryptLine },
     { icon: "⏱", label: "Uptime", value: humanizeDuration(sys.uptimeSec) },
