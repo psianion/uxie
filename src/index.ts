@@ -34,7 +34,10 @@ client.once(Events.ClientReady, (c) => {
 });
 
 client.on(Events.InteractionCreate, async (i) => {
-  await handleInteraction(i, scrypt.commands, env.DISCORD_OWNER_ID);
+  await handleInteraction(i, scrypt.commands, env.DISCORD_OWNER_ID, {
+    components: scrypt.components,
+    devGuildId: env.DISCORD_DEV_GUILD_ID,
+  });
 });
 
 // Stateless shutdown (decision 16): no caches/queues/scheduler to drain — just close the
