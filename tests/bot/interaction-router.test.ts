@@ -34,6 +34,16 @@ describe("handleInteraction", () => {
     expect(i.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
   });
 
+  test("does NOT defer when the command opts out (defer:false)", async () => {
+    const execute = mock(async () => {});
+    const c = new Collection<string, LoadedCommand>();
+    c.set("ping", { data: { name: "ping" } as any, execute, defer: false });
+    const i = fakeInteraction();
+    await handleInteraction(i, c, "123");
+    expect(i.deferReply).not.toHaveBeenCalled();
+    expect(execute).toHaveBeenCalled();
+  });
+
   test("ignores non-chat-input interactions", async () => {
     const execute = mock(async () => {});
     const i = fakeInteraction({ isChatInputCommand: () => false });

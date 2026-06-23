@@ -1,45 +1,50 @@
-// /ping — REST health probe ONLY (Design §6.7 / decision 15). No MCP probe: streamable-http
-// MCP endpoints don't answer unauthenticated probes and the REST surface is the truer
-// end-to-end signal (same process, same auth path). Reply is a STRING (not an embed).
-// Enriched with the gateway heartbeat (null-safe i.client.ws.ping before READY), a Status
-// enum, the editReply roundtrip, and process.uptime().
-//
-// No try/catch in the command body — interaction-router is the only catch site (decision 10).
-import { SlashCommandBuilder } from "discord.js";
+// /ping — Components V2 health panel (Design §6.7 / decision 15). REST health probe only.
+// Replies IMMEDIATELY (no defer): the probe's 500 ms timeout fits Discord's 3 s window, and
+// IsComponentsV2 must be set at reply time (a deferred placeholder can't carry it). The body
+// stays try/catch-free — rest.health() degrades-don't-crash, so /ping always renders.
+import { MessageFlags, SlashCommandBuilder } from "discord.js";
 import type { LoadedCommand } from "../../../bot/command-loader.ts";
 import type { ScryptRestClient } from "../rest-client.ts";
 import { withOwnerGate } from "../../../lib/command-builder.ts";
+import { buildStatusContainer } from "../../../lib/ui/status-container.ts";
+import { buildPingModel, type PingProbe } from "../ping/model.ts";
 
-enum Status {
-  Ok = "ok",
-  Degraded = "degraded",
+export interface PingOpts {
+  version: string;
+  scryptHost: string;
+  allowRestart: boolean;
 }
 
-export function buildPingCommand(rest: ScryptRestClient): LoadedCommand {
+export function buildPingCommand(rest: ScryptRestClient, opts: PingOpts): LoadedCommand {
   return {
+    defer: false,
     data: withOwnerGate(
       new SlashCommandBuilder().setName("ping").setDescription("Check uxie + scrypt health"),
     ),
     async execute(i) {
+      const t0 = performance.now();
       const h = await rest.health();
-      const status = h.ok ? Status.Ok : Status.Degraded;
-      const scryptPart = h.ok ? "ok" : (h.reason ?? "unreachable");
+      const latencyMs = Math.round(performance.now() - t0);
+      const probe: PingProbe = { ok: h.ok, reason: h.reason, latencyMs };
 
-      // i.client.ws.ping is -1 before READY in some builds and may be absent in stubs.
       const wsPing = i.client?.ws?.ping;
-      const heartbeat = typeof wsPing === "number" && wsPing >= 0 ? `${Math.round(wsPing)}ms` : "n/a";
+      const sys = {
+        heartbeatMs: typeof wsPing === "number" ? wsPing : null,
+        uptimeSec: Math.floor(process.uptime()),
+      };
 
-      const uptimeSec = Math.floor(process.uptime());
-      const reply = `🏓 uxie alive — status: ${status} — heartbeat ${heartbeat} — uptime ${uptimeSec}s — scrypt: ${scryptPart}`;
+      const flags = MessageFlags.Ephemeral | MessageFlags.IsComponentsV2;
+      await i.reply({ flags, components: [buildStatusContainer(buildPingModel(probe, sys, opts))] });
 
-      // editReply returns the message; measuring around it gives the REST roundtrip.
-      const sent = await i.editReply(reply);
-      const roundtrip =
+      // Second render appends the measured API roundtrip (editReply keeps the V2 message).
+      const sent = await i.fetchReply().catch(() => null);
+      const roundtripMs =
         sent && typeof (sent as { createdTimestamp?: number }).createdTimestamp === "number"
           ? (sent as { createdTimestamp: number }).createdTimestamp - i.createdTimestamp
           : undefined;
-      if (roundtrip !== undefined && roundtrip >= 0) {
-        await i.editReply(`${reply} — roundtrip ${roundtrip}ms`);
+      if (roundtripMs !== undefined && roundtripMs >= 0) {
+        const withRt = buildStatusContainer(buildPingModel(probe, { ...sys, roundtripMs }, opts));
+        await i.editReply({ flags, components: [withRt] }).catch(() => {});
       }
     },
   };

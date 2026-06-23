@@ -43,7 +43,11 @@ export async function handleInteraction(
     // Decision 9: gate BEFORE defer. Non-owner -> NotOwnerError -> pre-defer i.reply path.
     assertOwner(i, ownerId);
     scoped.info("command start");
-    await ci.deferReply({ flags: MessageFlags.Ephemeral });
+    // Components V2 commands (defer:false) must set IsComponentsV2 at reply time, which a
+    // pre-created deferred placeholder can't carry — so they own their single reply.
+    if (cmd.defer !== false) {
+      await ci.deferReply({ flags: MessageFlags.Ephemeral });
+    }
     await cmd.execute(ci, { clientTag, log: scoped });
     scoped.info("command ok");
   } catch (err) {

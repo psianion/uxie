@@ -23,6 +23,10 @@ export interface CommandContext {
 export interface LoadedCommand {
   data: SlashCommandBuilder | { name: string };
   execute: (i: ChatInputCommandInteraction, ctx: CommandContext) => Promise<void>;
+  // When false, the router does NOT auto-defer — the command issues its own reply
+  // (used by Components V2 commands that must set IsComponentsV2 at reply time).
+  // Absent or true preserves the default defer-then-editReply flow.
+  defer?: boolean;
 }
 
 export function buildCommandCollection(cmds: LoadedCommand[]): Collection<string, LoadedCommand> {

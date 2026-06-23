@@ -5,63 +5,77 @@ import { fakeInteraction } from "../../../helpers.ts";
 function fakeRest(health: any) {
   return { health: mock(async () => health) } as any;
 }
+const ctx = { clientTag: "uxie-x", log: { info() {}, warn() {}, error() {} } as any };
+const opts = { version: "0.1.0", scryptHost: "localhost:3777", allowRestart: false };
 
-const ctx = {
-  clientTag: "uxie-x",
-  log: { info: () => {}, warn: () => {}, error: () => {} } as any,
-};
-
-// /ping reads i.client.ws.ping for the heartbeat figure; provide a client stub.
-function pingInteraction(overrides: Record<string, unknown> = {}) {
+// /ping replies immediately (no defer). Provide reply/fetchReply/editReply + a client stub.
+function pingInteraction(over: Record<string, unknown> = {}) {
   return fakeInteraction({
-    deferred: true,
+    deferred: false,
     client: { ws: { ping: 42 } },
     createdTimestamp: Date.now() - 100,
-    ...overrides,
+    reply: mock(async (_: unknown) => {}),
+    fetchReply: mock(async () => ({ createdTimestamp: Date.now() })),
+    editReply: mock(async (_: unknown) => {}),
+    ...over,
   });
 }
 
-describe("/ping", () => {
-  test("replies a STRING, alive + scrypt ok when health is good (decision 15)", async () => {
-    const cmd = buildPingCommand(fakeRest({ ok: true }));
+const V2 = 1 << 15; // MessageFlags.IsComponentsV2 = 32768
+const EPHEMERAL = 1 << 6; // 64
+
+describe("/ping (Components V2)", () => {
+  test("opts out of auto-defer", () => {
+    expect(buildPingCommand(fakeRest({ ok: true }), opts).defer).toBe(false);
+  });
+
+  test("command data name is 'ping' with default builder shape (decision 7)", () => {
+    const cmd = buildPingCommand(fakeRest({ ok: true }), opts);
+    expect(cmd.data.name).toBe("ping");
+    expect((cmd.data as any).toJSON().default_member_permissions).toBe("0");
+  });
+
+  test("replies once with Ephemeral|IsComponentsV2 and components (no content/embeds)", async () => {
+    const cmd = buildPingCommand(fakeRest({ ok: true }), opts);
     const i = pingInteraction();
     await cmd.execute(i, ctx);
-    const arg = i.editReply.mock.calls[0][0];
-    expect(typeof arg).toBe("string");
-    expect(arg).toMatch(/alive.*scrypt: ok/i);
+    const payload = i.reply.mock.calls[0][0];
+    expect(payload.flags & V2).toBe(V2);
+    expect(payload.flags & EPHEMERAL).toBe(EPHEMERAL);
+    expect(Array.isArray(payload.components)).toBe(true);
+    expect(payload.content).toBeUndefined();
+    expect(payload.embeds).toBeUndefined();
   });
 
-  test("replies scrypt: unreachable when health fails", async () => {
-    const cmd = buildPingCommand(fakeRest({ ok: false, reason: "unreachable" }));
+  test("green container when scrypt is healthy", async () => {
+    const cmd = buildPingCommand(fakeRest({ ok: true }), opts);
     const i = pingInteraction();
     await cmd.execute(i, ctx);
-    expect(i.editReply).toHaveBeenCalledWith(expect.stringContaining("unreachable"));
+    const json = JSON.stringify(i.reply.mock.calls[0][0].components[0].toJSON());
+    expect(json).toContain("OK");
   });
 
-  test("surfaces the failure reason for auth and server", async () => {
-    const auth = buildPingCommand(fakeRest({ ok: false, reason: "auth" }));
-    const ia = pingInteraction();
-    await auth.execute(ia, ctx);
-    expect(ia.editReply).toHaveBeenCalledWith(expect.stringContaining("auth"));
+  test("down container shows recovery buttons when scrypt unreachable", async () => {
+    const cmd = buildPingCommand(fakeRest({ ok: false, reason: "unreachable" }), opts);
+    const i = pingInteraction();
+    await cmd.execute(i, ctx);
+    const json = JSON.stringify(i.reply.mock.calls[0][0].components[0].toJSON());
+    expect(json).toContain("ping:retry");
+    expect(json).toContain("ping:details");
   });
 
-  test("is null-safe when client.ws.ping is null (not yet connected)", async () => {
-    const cmd = buildPingCommand(fakeRest({ ok: true }));
+  test("re-renders once via editReply to append API roundtrip", async () => {
+    const cmd = buildPingCommand(fakeRest({ ok: true }), opts);
+    const i = pingInteraction();
+    await cmd.execute(i, ctx);
+    expect(i.fetchReply).toHaveBeenCalled();
+    expect(i.editReply).toHaveBeenCalled();
+  });
+
+  test("null-safe when client.ws.ping is null", async () => {
+    const cmd = buildPingCommand(fakeRest({ ok: true }), opts);
     const i = pingInteraction({ client: { ws: { ping: null } } });
     await cmd.execute(i, ctx);
-    const arg = i.editReply.mock.calls[0][0];
-    expect(typeof arg).toBe("string");
-    expect(arg).toMatch(/alive/i);
-  });
-
-  test("command data name is 'ping'", () => {
-    const cmd = buildPingCommand(fakeRest({ ok: true }));
-    expect(cmd.data.name).toBe("ping");
-  });
-
-  test("builder carries the default shape (decision 7)", () => {
-    const cmd = buildPingCommand(fakeRest({ ok: true }));
-    const json = (cmd.data as any).toJSON();
-    expect(json.default_member_permissions).toBe("0");
+    expect(i.reply).toHaveBeenCalled();
   });
 });

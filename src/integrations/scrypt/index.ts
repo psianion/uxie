@@ -20,7 +20,13 @@ export function buildScryptModule(env: Env): ScryptModule {
   // Reads use the MCP streamable-http endpoint (decision 2 / scrypt-contract §2); writes use
   // REST. Same SCRYPT_AUTH bearer; different base URL.
   const mcp = new ScryptMcpClient(env.SCRYPT_MCP_URL, env.SCRYPT_AUTH);
-  const cmds: LoadedCommand[] = [buildPingCommand(rest)];
+  const cmds: LoadedCommand[] = [
+    buildPingCommand(rest, {
+      version: "0.1.0",
+      scryptHost: new URL(env.SCRYPT_SERVER_URL).host,
+      allowRestart: false,
+    }),
+  ];
   return {
     commands: buildCommandCollection(cmds),
     rest,
