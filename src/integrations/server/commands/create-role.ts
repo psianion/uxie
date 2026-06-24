@@ -23,24 +23,8 @@ import { ConfigError } from "../../../lib/errors.ts";
 import { buildStatusContainer } from "../../../lib/ui/status-container.ts";
 import type { StatusModel, StatusRow } from "../../../lib/ui/status-container.ts";
 
-// Named-color choices → hex numbers mapped in the handler. Values are the choice value strings.
-const COLOR_CHOICES: { name: string; value: string }[] = [
-  { name: "Default", value: "Default" },
-  { name: "Red", value: "Red" },
-  { name: "Orange", value: "Orange" },
-  { name: "Yellow", value: "Yellow" },
-  { name: "Green", value: "Green" },
-  { name: "Aqua", value: "Aqua" },
-  { name: "Blue", value: "Blue" },
-  { name: "Purple", value: "Purple" },
-  { name: "Pink", value: "Pink" },
-  { name: "Gold", value: "Gold" },
-  { name: "Navy", value: "Navy" },
-  { name: "Grey", value: "Grey" },
-  { name: "White", value: "White" },
-  { name: "Black", value: "Black" },
-];
-
+// Named color → hex. The slash-command `color` choice list is derived from these keys (below),
+// so the picker and the resolver can never drift.
 const COLOR_HEX: Record<string, number> = {
   Default: 0x000000,
   Red: 0xed4245,
@@ -57,6 +41,8 @@ const COLOR_HEX: Record<string, number> = {
   White: 0xffffff,
   Black: 0x23272a,
 };
+
+const COLOR_CHOICES = Object.keys(COLOR_HEX).map((name) => ({ name, value: name }));
 
 const HEX_RE = /^#?[0-9a-fA-F]{6}$/;
 
@@ -101,18 +87,19 @@ const PRESETS: Record<string, bigint[]> = {
   admin: [PermissionFlagsBits.Administrator],
 };
 
-// perm_* option name → PermissionFlagsBits member. OR-ed in on top of the preset.
-const PERM_TOGGLES: Record<string, bigint> = {
-  perm_administrator: PermissionFlagsBits.Administrator,
-  perm_manage_guild: PermissionFlagsBits.ManageGuild,
-  perm_manage_roles: PermissionFlagsBits.ManageRoles,
-  perm_manage_channels: PermissionFlagsBits.ManageChannels,
-  perm_manage_messages: PermissionFlagsBits.ManageMessages,
-  perm_kick_members: PermissionFlagsBits.KickMembers,
-  perm_ban_members: PermissionFlagsBits.BanMembers,
-  perm_moderate_members: PermissionFlagsBits.ModerateMembers,
-  perm_mention_everyone: PermissionFlagsBits.MentionEveryone,
-};
+// perm_* toggles: the boolean slash-command option AND the bit it OR-s in, in one table — the
+// builder declares an option per row and execute() reads the same rows, so they can't drift.
+const PERM_OPTIONS: { name: string; flag: bigint; desc: string }[] = [
+  { name: "perm_administrator", flag: PermissionFlagsBits.Administrator, desc: "Grant Administrator" },
+  { name: "perm_manage_guild", flag: PermissionFlagsBits.ManageGuild, desc: "Grant Manage Server" },
+  { name: "perm_manage_roles", flag: PermissionFlagsBits.ManageRoles, desc: "Grant Manage Roles" },
+  { name: "perm_manage_channels", flag: PermissionFlagsBits.ManageChannels, desc: "Grant Manage Channels" },
+  { name: "perm_manage_messages", flag: PermissionFlagsBits.ManageMessages, desc: "Grant Manage Messages" },
+  { name: "perm_kick_members", flag: PermissionFlagsBits.KickMembers, desc: "Grant Kick Members" },
+  { name: "perm_ban_members", flag: PermissionFlagsBits.BanMembers, desc: "Grant Ban Members" },
+  { name: "perm_moderate_members", flag: PermissionFlagsBits.ModerateMembers, desc: "Grant Timeout Members" },
+  { name: "perm_mention_everyone", flag: PermissionFlagsBits.MentionEveryone, desc: "Grant Mention @everyone" },
+];
 
 function resolveColor(colorChoice: string | null, colorHex: string | null): number | undefined {
   if (colorHex !== null) {
@@ -130,80 +117,49 @@ function resolveColor(colorChoice: string | null, colorHex: string | null): numb
 }
 
 export function buildCreateRoleCommand(): LoadedCommand {
-  return {
-    // No defer:false — the router auto-defers so the ack precedes the roles.create write below.
-    data: withOwnerGate(
-      new SlashCommandBuilder()
-        .setName("create-role")
-        .setDescription("Create a guild role with granular options")
-        .addStringOption((o) =>
-          o.setName("name").setDescription("Name of the role").setRequired(true),
-        )
-        .addStringOption((o) =>
-          o.setName("color").setDescription("Named color").addChoices(...COLOR_CHOICES),
-        )
-        .addStringOption((o) =>
-          o
-            .setName("color_hex")
-            .setDescription("Custom hex like #5865F2 (overrides color)"),
-        )
-        .addBooleanOption((o) =>
-          o
-            .setName("hoist")
-            .setDescription("Display members of this role separately in the sidebar"),
-        )
-        .addBooleanOption((o) =>
-          o.setName("mentionable").setDescription("Allow anyone to @mention this role"),
-        )
-        .addIntegerOption((o) =>
-          o
-            .setName("position")
-            .setDescription("Insert the role at this position")
-            .setMinValue(1),
-        )
-        .addStringOption((o) =>
-          o
-            .setName("permission_preset")
-            .setDescription("Base permission bundle")
-            .addChoices(
-              { name: "none", value: "none" },
-              { name: "member", value: "member" },
-              { name: "moderator", value: "moderator" },
-              { name: "manager", value: "manager" },
-              { name: "admin", value: "admin" },
-            ),
-        )
-        .addBooleanOption((o) =>
-          o.setName("perm_administrator").setDescription("Grant Administrator"),
-        )
-        .addBooleanOption((o) =>
-          o.setName("perm_manage_guild").setDescription("Grant Manage Server"),
-        )
-        .addBooleanOption((o) =>
-          o.setName("perm_manage_roles").setDescription("Grant Manage Roles"),
-        )
-        .addBooleanOption((o) =>
-          o.setName("perm_manage_channels").setDescription("Grant Manage Channels"),
-        )
-        .addBooleanOption((o) =>
-          o.setName("perm_manage_messages").setDescription("Grant Manage Messages"),
-        )
-        .addBooleanOption((o) =>
-          o.setName("perm_kick_members").setDescription("Grant Kick Members"),
-        )
-        .addBooleanOption((o) =>
-          o.setName("perm_ban_members").setDescription("Grant Ban Members"),
-        )
-        .addBooleanOption((o) =>
-          o.setName("perm_moderate_members").setDescription("Grant Timeout Members"),
-        )
-        .addBooleanOption((o) =>
-          o.setName("perm_mention_everyone").setDescription("Grant Mention @everyone"),
-        )
-        .addStringOption((o) =>
-          o.setName("reason").setDescription("Audit-log reason"),
+  // No defer:false — the router auto-defers so the ack precedes the roles.create write below.
+  const data = new SlashCommandBuilder()
+    .setName("create-role")
+    .setDescription("Create a guild role with granular options")
+    .addStringOption((o) =>
+      o.setName("name").setDescription("Name of the role").setRequired(true),
+    )
+    .addStringOption((o) =>
+      o.setName("color").setDescription("Named color").addChoices(...COLOR_CHOICES),
+    )
+    .addStringOption((o) =>
+      o.setName("color_hex").setDescription("Custom hex like #5865F2 (overrides color)"),
+    )
+    .addBooleanOption((o) =>
+      o.setName("hoist").setDescription("Display members of this role separately in the sidebar"),
+    )
+    .addBooleanOption((o) =>
+      o.setName("mentionable").setDescription("Allow anyone to @mention this role"),
+    )
+    .addIntegerOption((o) =>
+      o.setName("position").setDescription("Insert the role at this position").setMinValue(1),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("permission_preset")
+        .setDescription("Base permission bundle")
+        .addChoices(
+          { name: "none", value: "none" },
+          { name: "member", value: "member" },
+          { name: "moderator", value: "moderator" },
+          { name: "manager", value: "manager" },
+          { name: "admin", value: "admin" },
         ),
-    ),
+    );
+  // Declare one boolean option per perm toggle (kept after the core options, before reason, to
+  // preserve the published option order).
+  for (const p of PERM_OPTIONS) {
+    data.addBooleanOption((o) => o.setName(p.name).setDescription(p.desc));
+  }
+  data.addStringOption((o) => o.setName("reason").setDescription("Audit-log reason"));
+
+  return {
+    data: withOwnerGate(data),
     async execute(i, ctx) {
       const guild = i.guild;
       if (!guild) throw new ConfigError("create-role", "no guild context");
@@ -221,8 +177,8 @@ export function buildCreateRoleCommand(): LoadedCommand {
 
       // Start from the preset's bits (none/empty when unset), then OR-in each enabled perm_*.
       const bits = new PermissionsBitField(PRESETS[presetName ?? "none"] ?? []);
-      for (const [optName, flag] of Object.entries(PERM_TOGGLES)) {
-        if (i.options.getBoolean(optName) === true) bits.add(flag);
+      for (const p of PERM_OPTIONS) {
+        if (i.options.getBoolean(p.name) === true) bits.add(p.flag);
       }
       const hasPerms = bits.bitfield !== 0n;
 
