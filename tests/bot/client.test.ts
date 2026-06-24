@@ -3,15 +3,18 @@ import { GatewayIntentBits, IntentsBitField } from "discord.js";
 import { createDiscordClient } from "../../src/bot/client.ts";
 
 describe("createDiscordClient", () => {
-  test("declares exactly the Guilds intent — no message/privileged intents (decision 6)", () => {
+  test("declares Guilds + GuildMembers — no message/DM intents (decision 6 + onboarding)", () => {
     const c = createDiscordClient();
     const bits = new IntentsBitField(c.options.intents);
     expect(bits.has(GatewayIntentBits.Guilds)).toBe(true);
-    // Excluded — slash-only bot, keep attack surface minimal.
+    // GuildMembers (privileged) is required for guildMemberAdd → guest-role assignment.
+    expect(bits.has(GatewayIntentBits.GuildMembers)).toBe(true);
+    // Excluded — onboarding state rides on button customIds (not reactions), and the bot
+    // never reads message content, so keep the attack surface minimal.
     expect(bits.has(GatewayIntentBits.GuildMessages)).toBe(false);
     expect(bits.has(GatewayIntentBits.MessageContent)).toBe(false);
     expect(bits.has(GatewayIntentBits.DirectMessages)).toBe(false);
-    expect(bits.has(GatewayIntentBits.GuildMembers)).toBe(false);
+    expect(bits.has(GatewayIntentBits.GuildMessageReactions)).toBe(false);
   });
 
   test("suppresses mentions on replies (decision 8)", () => {

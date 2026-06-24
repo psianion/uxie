@@ -20,6 +20,7 @@ import { assertOwner } from "../lib/auth.ts";
 import { makeClientTag } from "../lib/client-tag.ts";
 import { log } from "../lib/log.ts";
 import type { LoadedCommand } from "./command-loader.ts";
+import type { OnboardingHandlers } from "../integrations/onboarding/index.ts";
 
 interface ScopedLogger {
   info: (m: string, f?: Record<string, unknown>) => void;
@@ -41,6 +42,10 @@ export interface ComponentHandler {
 export interface RouterOpts {
   components?: Collection<string, ComponentHandler>;
   devGuildId?: string;
+  // Onboarding button handlers. The `onboard:` namespace self-gates (guests may click role
+  // buttons; the approval-handler enforces owner-only internally), so it is dispatched BEFORE
+  // the owner + dev-guild-gated generic component path — NOT through it.
+  onboarding?: OnboardingHandlers;
 }
 
 export async function handleInteraction(
@@ -81,6 +86,38 @@ export async function handleInteraction(
 // throws (decision 10): a failing handler is logged and best-effort acknowledged.
 async function handleButton(i: ButtonInteraction, ownerId: string, opts: RouterOpts): Promise<void> {
   const scoped = log.child({ interactionId: i.id, customId: i.customId });
+
+  // Onboarding namespace: the role-pick handler ACKs guests (any member may click), and the
+  // approval handler enforces owner-only itself — so onboarding bypasses the generic owner +
+  // dev-guild gate below. The router stays thin (it only dispatches by customId prefix); the
+  // handlers carry NO try/catch (faults bubble) and are caught here, the single button catch
+  // site (decision 10), so nothing escapes the gateway.
+  const onboarding = opts.onboarding;
+  if (onboarding && i.customId.startsWith("onboard:")) {
+    try {
+      if (i.customId.startsWith("onboard:pick:")) {
+        await onboarding.handleRolePick(i);
+      } else if (
+        i.customId.startsWith("onboard:approve:") ||
+        i.customId.startsWith("onboard:deny:")
+      ) {
+        await onboarding.handleApprovalButton(i, ownerId);
+      }
+      // Unknown onboard: actions fall through and return without action.
+    } catch (err) {
+      scoped.warn("onboarding handler error", { err });
+      // Best-effort ack; swallow (e.g. a 10062 expired interaction) so nothing escapes. If the
+      // handler already deferred/replied (e.g. role-pick deferReply, then the post threw), edit
+      // that reply instead of attempting a second reply that would itself fail.
+      const recover =
+        i.deferred || i.replied
+          ? i.editReply({ content: "couldn't do that" })
+          : i.reply({ content: "couldn't do that", flags: MessageFlags.Ephemeral });
+      await recover.catch(() => {});
+    }
+    return;
+  }
+
   const handlers = opts.components;
   if (!handlers) return;
   const namespace = i.customId.split(":")[0] ?? "";
