@@ -3,10 +3,13 @@
 // SIGTERM/SIGINT (decision 16): destroy the gateway connection, then exit(0).
 import { Events } from "discord.js";
 import { parseEnv } from "./lib/env.ts";
+import { assertGuildConfig } from "./config/guild.ts";
 import { log } from "./lib/log.ts";
 import { createDiscordClient } from "./bot/client.ts";
 import { handleInteraction } from "./bot/interaction-router.ts";
 import { buildScryptModule } from "./integrations/scrypt/index.ts";
+import { buildCommandRegistry } from "./bot/command-registry.ts";
+import { buildOnboardingModule } from "./integrations/onboarding/index.ts";
 
 process.on("uncaughtException", (err) => {
   log.error("uncaughtException", { err });
@@ -20,6 +23,10 @@ process.on("unhandledRejection", (reason) => {
 let env;
 try {
   env = parseEnv();
+  // Guild structure is not a secret, so it does not go through env.ts — validate it here,
+  // right after parseEnv(), in the same fail-fast try/catch. assertGuildConfig() throws a
+  // ConfigError naming the offending field (e.g. an unfilled placeholder snowflake).
+  assertGuildConfig();
 } catch (err) {
   // ConfigError names the offending field; exit 1 so the operator knows boot misconfig.
   log.error("config error — exiting", { err });
@@ -27,16 +34,23 @@ try {
 }
 
 const client = createDiscordClient();
+// scrypt is still built for its component handlers (the /ping refresh button); the merged
+// command registry (scrypt + server) is the single source of the slash-command set.
 const scrypt = buildScryptModule(env);
+const allCommands = buildCommandRegistry(env);
+// Registers GuildMemberAdd (guest-role assignment) + the ready-time #welcome reconcile, and
+// returns the two button handlers the router dispatches the onboard: namespace to.
+const onboarding = buildOnboardingModule(env, client);
 
 client.once(Events.ClientReady, (c) => {
   log.info("uxie ready", { tag: c.user.tag, guild: env.DISCORD_DEV_GUILD_ID });
 });
 
 client.on(Events.InteractionCreate, async (i) => {
-  await handleInteraction(i, scrypt.commands, env.DISCORD_OWNER_ID, {
+  await handleInteraction(i, allCommands, env.DISCORD_OWNER_ID, {
     components: scrypt.components,
     devGuildId: env.DISCORD_DEV_GUILD_ID,
+    onboarding,
   });
 });
 

@@ -1,15 +1,16 @@
 // Standalone command registration: `bun run deploy`. PUTs the guild command set to the
-// dev guild. Uses the same buildScryptModule the bot uses, so the deployed definitions
-// can never drift from what the router dispatches. Env is read only via parseEnv (decision 11).
+// dev guild. Uses the same buildCommandRegistry the bot uses (scrypt + server, merged), so
+// the deployed definitions can never drift from what the router dispatches. Registers
+// /ping, /create-category, /create-channel. Env is read only via parseEnv (decision 11).
 import { REST, Routes, type SlashCommandBuilder } from "discord.js";
 import { parseEnv } from "../lib/env.ts";
-import { buildScryptModule } from "../integrations/scrypt/index.ts";
+import { buildCommandRegistry } from "./command-registry.ts";
 import { log } from "../lib/log.ts";
 
 const env = parseEnv();
-const scrypt = buildScryptModule(env);
+const commands = buildCommandRegistry(env);
 
-const body = Array.from(scrypt.commands.values()).map((c) =>
+const body = Array.from(commands.values()).map((c) =>
   typeof (c.data as SlashCommandBuilder).toJSON === "function"
     ? (c.data as SlashCommandBuilder).toJSON()
     : c.data,

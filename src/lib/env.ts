@@ -12,13 +12,38 @@ const bool = z
   .transform((v) => v === true || v === "1" || v === "true")
   .pipe(z.boolean());
 
+// UX-SEC-002: the SCRYPT_AUTH bearer is attached to every Scrypt request, so the URL must keep
+// it off untrusted wire. Allow https:// to any host; allow http:// only to a loopback literal
+// (localhost / 127.0.0.1 / [::1], where traffic never leaves the host). A plaintext http:// to a
+// remote host is rejected at boot — pointing Scrypt at a non-loopback host requires https://.
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const scryptUrl = z
+  .string()
+  .url()
+  .refine(
+    (raw) => {
+      let u: URL;
+      try {
+        u = new URL(raw);
+      } catch {
+        return false;
+      }
+      if (u.protocol === "https:") return true;
+      return u.protocol === "http:" && LOOPBACK.has(u.hostname);
+    },
+    {
+      message:
+        "must be https:// or http:// to a loopback host (localhost/127.0.0.1/[::1]); plaintext http:// to a remote host would leak SCRYPT_AUTH",
+    },
+  );
+
 const schema = z.object({
   DISCORD_BOT_TOKEN: z.string().min(1),
   DISCORD_APP_ID: z.string().min(1),
   DISCORD_DEV_GUILD_ID: z.string().min(1),
   DISCORD_OWNER_ID: z.string().min(1),
-  SCRYPT_SERVER_URL: z.string().url(),
-  SCRYPT_MCP_URL: z.string().url(),
+  SCRYPT_SERVER_URL: scryptUrl,
+  SCRYPT_MCP_URL: scryptUrl,
   SCRYPT_AUTH: z.string().min(1),
   ALLOW_SCRYPT_RESTART: bool.default(false),
   SCRYPT_RESTART_CMD: z.string().min(1).default("docker compose restart scrypt"),

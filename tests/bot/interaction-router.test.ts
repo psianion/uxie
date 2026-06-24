@@ -199,3 +199,90 @@ describe("handleInteraction — buttons", () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe("handleInteraction — onboarding buttons", () => {
+  function onboardingStub() {
+    return {
+      handleRolePick: mock(async (_i: unknown) => {}),
+      handleApprovalButton: mock(async (_i: unknown, _ownerId?: string) => {}),
+    };
+  }
+
+  test("onboard:pick routes to handleRolePick (not approval, not the generic gate)", async () => {
+    const onboarding = onboardingStub();
+    const i = fakeButton({ customId: "onboard:pick:111111111111111111", user: { id: "999" } });
+    await handleInteraction(i, makeCommands(mock(async () => {})), "123", { onboarding });
+    expect(onboarding.handleRolePick).toHaveBeenCalledTimes(1);
+    expect(onboarding.handleApprovalButton).not.toHaveBeenCalled();
+  });
+
+  test("onboard:approve routes to handleApprovalButton with the ownerId", async () => {
+    const onboarding = onboardingStub();
+    const i = fakeButton({
+      customId: "onboard:approve:111111111111111111:222222222222222222",
+    });
+    await handleInteraction(i, makeCommands(mock(async () => {})), "123", { onboarding });
+    expect(onboarding.handleApprovalButton).toHaveBeenCalledTimes(1);
+    expect(onboarding.handleApprovalButton.mock.calls[0]?.[1]).toBe("123");
+    expect(onboarding.handleRolePick).not.toHaveBeenCalled();
+  });
+
+  test("onboard:deny routes to handleApprovalButton", async () => {
+    const onboarding = onboardingStub();
+    const i = fakeButton({
+      customId: "onboard:deny:111111111111111111:222222222222222222",
+    });
+    await handleInteraction(i, makeCommands(mock(async () => {})), "123", { onboarding });
+    expect(onboarding.handleApprovalButton).toHaveBeenCalledTimes(1);
+  });
+
+  test("onboarding bypasses the owner gate — a non-owner role-pick still dispatches", async () => {
+    // Guests (non-owners) MUST be able to click role buttons; the handler self-gates.
+    const onboarding = onboardingStub();
+    const i = fakeButton({ customId: "onboard:pick:111111111111111111", user: { id: "999" } });
+    await handleInteraction(i, makeCommands(mock(async () => {})), "123", {
+      components: new Collection(),
+      devGuildId: "guild-1",
+      onboarding,
+    });
+    expect(onboarding.handleRolePick).toHaveBeenCalledTimes(1);
+  });
+
+  test("unknown onboard: action does nothing", async () => {
+    const onboarding = onboardingStub();
+    const i = fakeButton({ customId: "onboard:bogus:1" });
+    await handleInteraction(i, makeCommands(mock(async () => {})), "123", { onboarding });
+    expect(onboarding.handleRolePick).not.toHaveBeenCalled();
+    expect(onboarding.handleApprovalButton).not.toHaveBeenCalled();
+  });
+
+  test("a non-onboard button does not reach the onboarding handlers", async () => {
+    const onboarding = onboardingStub();
+    const i = fakeButton({ customId: "ping:refresh" });
+    await handleInteraction(i, makeCommands(mock(async () => {})), "123", { onboarding });
+    expect(onboarding.handleRolePick).not.toHaveBeenCalled();
+    expect(onboarding.handleApprovalButton).not.toHaveBeenCalled();
+  });
+
+  test("a throwing onboarding handler never escapes (decision 10)", async () => {
+    const onboarding = {
+      handleRolePick: mock(async () => {
+        throw new Error("boom");
+      }),
+      handleApprovalButton: mock(async () => {}),
+    };
+    const i = fakeButton({ customId: "onboard:pick:111111111111111111" });
+    await expect(
+      handleInteraction(i, makeCommands(mock(async () => {})), "123", { onboarding }),
+    ).resolves.toBeUndefined();
+  });
+
+  test("a chat-input command still flows through the existing path", async () => {
+    const onboarding = onboardingStub();
+    const execute = mock(async () => {});
+    const i = fakeInteraction();
+    await handleInteraction(i, makeCommands(execute), "123", { onboarding });
+    expect(execute).toHaveBeenCalled();
+    expect(onboarding.handleRolePick).not.toHaveBeenCalled();
+  });
+});
