@@ -1,13 +1,12 @@
 # integrations
 
-Outward-facing modules live here, one folder per module. Each module owns its
-commands, channel predicates, and clients, and exposes a single
-`register<Module>Integration(bot)` entry point.
+Outward-facing modules, one folder per module. Each owns its commands / event handlers / clients
+and exposes a `build<Module>Module(...)` factory, wired in the boot path (`src/index.ts`) and merged
+into the command registry (`src/bot/command-registry.ts`).
 
-- `scrypt/` — the v1 module: REST writes (`POST /api/ingest`) + MCP reads
-  (`searchNotes`, `semanticSearch`, `getNote`). Hosts the six slash commands and
-  the owner @-mention handler (`src/bot/mention-handler.ts`).
-- `para-raid/` — v2 module placeholder. `orchestrator-stub.ts` defines the seam
-  (`dispatch()` throws `NotImplemented`) so v1 stays a pure translation layer.
-
-Modules go here.
+| Module | Surface | Entry point |
+|--------|---------|-------------|
+| [`onboarding/`](./onboarding/README.md) | Event-driven guest onboarding: join → guest role → role picker → request → owner approve/deny → DM. No slash commands. | `buildOnboardingModule(env, client)` |
+| [`server/`](./server/README.md) | Owner-gated guild admin: `/create-category`, `/create-channel`, `/create-role`. | `buildServerModule(env)` |
+| [`scrypt/`](./scrypt/README.md) | `/ping` health panel + Scrypt restart + connectivity logging. **Capture/query is deferred** pending Scrypt's ingestion rework. | `buildScryptModule(env)` |
+| [`para-raid/`](./para-raid/README.md) | Reserved v2 orchestration seam — inert (`dispatch()` throws). | — |

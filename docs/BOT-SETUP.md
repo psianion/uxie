@@ -53,13 +53,13 @@ Discord **REST API v10**. Runtime is **Bun**, not Node.
 
 ## How uxie's channels & replies actually work
 
-uxie acts server-wide but only for **you** (`DISCORD_OWNER_ID`), via two mechanisms:
+uxie's privileged surface is owner-only (`DISCORD_OWNER_ID`):
 
-- **Slash commands → ephemeral interaction responses.** Every command
-  (`/ping`, `/capture`, `/ask`, `/search`, `/journal`, `/brief`) defers, then `editReply`
-  with a classic embed and `flags: MessageFlags.Ephemeral` — private to you, no scrollback.
-- **@-mention → in-channel help reply (auto-deleting).** When you tag uxie in any channel,
-  it replies with a help overview of the commands and deletes its own reply after ~30s.
+- **Slash commands → ephemeral Components V2 responses.** `/ping` (Scrypt health panel) plus the
+  owner-only server-admin commands `/create-category`, `/create-channel`, `/create-role` defer, then
+  `editReply` with a Components V2 container and `flags: MessageFlags.Ephemeral` — private to you.
+- **Onboarding is event-driven** (not a command): new members get a guest role + a welcome role
+  picker; a request posts an owner-reviewed Approve/Deny card. See `src/integrations/onboarding/`.
   Anyone who is not the owner (or an `@everyone`/role ping) is silently ignored. Later this
   becomes an agentic parser that interprets your message and routes it.
 
@@ -108,9 +108,7 @@ Copy `.env.example` → `.env` and fill every field (boot validates via Zod in
 | `DISCORD_APP_ID` | Portal → General Information → Application ID (Part B.2) |
 | `DISCORD_DEV_GUILD_ID` | Discord client → Copy Server ID (Part D.2) |
 | `DISCORD_OWNER_ID` | Discord client → Copy User ID (Part D.3) |
-| `USER_TZ` | e.g. `Asia/Kolkata` (IANA tz) |
-| `SCRYPT_SERVER_URL` | Scrypt REST base, e.g. `http://scrypt:3000` |
-| `SCRYPT_MCP_URL` | Scrypt MCP endpoint, e.g. `http://scrypt:3000/mcp` |
+| `SCRYPT_SERVER_URL` | Scrypt REST base, e.g. `http://localhost:3777` (`http://` only to a loopback host; otherwise `https://`) |
 | `SCRYPT_AUTH` | Scrypt bearer token (32-byte hex, per Guidelines §17.1) — sent as `Authorization: Bearer ${SCRYPT_AUTH}`; paste the raw token, no `Bearer ` prefix |
 
 ---
@@ -119,13 +117,12 @@ Copy `.env.example` → `.env` and fill every field (boot validates via Zod in
 
 ```bash
 bun install
-bun run deploy   # PUTs the 6 slash commands to DISCORD_DEV_GUILD_ID (guild-scoped, instant)
+bun run deploy   # PUTs the 4 slash commands to DISCORD_DEV_GUILD_ID (guild-scoped, instant)
 bun run start    # boots the gateway client
 ```
 
-Verify in your test server: type `/ping` → expect a uxie + scrypt health embed.
-@-mention uxie in any channel → expect a help overview reply (auto-deletes after ~30s).
-Commands: `/ping`, `/capture`, `/search`, `/ask`, `/journal`, `/brief`.
+Verify in your test server: type `/ping` → expect a uxie + Scrypt health panel (Components V2).
+Commands: `/ping`, `/create-category`, `/create-channel`, `/create-role`.
 
 ---
 

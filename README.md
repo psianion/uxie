@@ -13,7 +13,11 @@ Bun + TypeScript + discord.js v14.
 - **Server management** — owner-only `/create-channel`, `/create-category`, and `/create-role`,
   including private-channel permission overwrites and role permission presets.
 - **Scrypt** — a `/ping` health panel (Components V2) with refresh / retry / auto-retry recovery
-  buttons and an **optional, owner-only** "Restart Scrypt" button (off by default).
+  buttons and an **optional, owner-only** "Restart Scrypt" button (off by default). Connectivity
+  up/down transitions are logged. _Capture/query (`/capture`, `/search`, …) is deferred pending
+  Scrypt's ingestion rework — see `src/integrations/scrypt/README.md`._
+
+Each module documents itself in `src/integrations/<module>/README.md`.
 
 ## Discord prerequisites
 
@@ -42,7 +46,6 @@ in `src/config/guild.ts` (operator-edited snowflakes, validated loudly at boot; 
 | `DISCORD_DEV_GUILD_ID` | yes | — | Guild the bot operates in |
 | `DISCORD_OWNER_ID` | yes | — | The single owner; gates every privileged action |
 | `SCRYPT_SERVER_URL` | yes | — | Scrypt REST base — see scheme rule below |
-| `SCRYPT_MCP_URL` | yes | — | Scrypt MCP endpoint — see scheme rule below |
 | `SCRYPT_AUTH` | yes | — | Scrypt bearer token (secret) |
 | `UXIE_ENV` | no | `local` | Label shown in the `/ping` Host row (e.g. `local`, `vps`) |
 | `ALLOW_SCRYPT_RESTART` | no | `0` | Opt-in for the owner-only Restart Scrypt button |
@@ -50,8 +53,8 @@ in `src/config/guild.ts` (operator-edited snowflakes, validated loudly at boot; 
 
 ### Scrypt URL scheme rule (security)
 
-To keep the `SCRYPT_AUTH` bearer off untrusted wire, `SCRYPT_SERVER_URL` / `SCRYPT_MCP_URL`
-accept `https://` to any host but `http://` **only to a loopback host** (`localhost` /
+To keep the `SCRYPT_AUTH` bearer off untrusted wire, `SCRYPT_SERVER_URL`
+accepts `https://` to any host but `http://` **only to a loopback host** (`localhost` /
 `127.0.0.1` / `[::1]`). Pointing Scrypt at a non-loopback host over plaintext `http://` fails
 boot with a `ConfigError`. For a remote or docker-internal Scrypt, use `https://`.
 
