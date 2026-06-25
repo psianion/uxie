@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildCommandRegistry } from "../../src/bot/command-registry.ts";
+import { buildScryptModule } from "../../src/integrations/scrypt/index.ts";
 import type { Env } from "../../src/lib/env.ts";
 
 // Minimal hand-built Env. buildScryptModule constructs a ScryptRestClient/ScryptMcpClient from
@@ -34,5 +35,14 @@ describe("buildCommandRegistry", () => {
 
   test("does not throw on the real module set (no cross-module name collision)", () => {
     expect(() => buildCommandRegistry(env)).not.toThrow();
+  });
+
+  // Regression: the boot path passes its already-built scrypt module so the /ping command and
+  // its component handlers share ONE ScryptRestClient. If the registry rebuilt scrypt instead,
+  // the command's rest client would differ from the components', fragmenting connectivity state.
+  test("uses the passed-in scrypt module's command instance (shared, not rebuilt)", () => {
+    const scrypt = buildScryptModule(env);
+    const reg = buildCommandRegistry(env, scrypt);
+    expect(reg.get("ping")).toBe(scrypt.commands.get("ping"));
   });
 });

@@ -45,10 +45,11 @@ try {
 }
 
 const client = createDiscordClient();
-// scrypt is still built for its component handlers (the /ping refresh button); the merged
-// command registry (scrypt + server) is the single source of the slash-command set.
+// Build the scrypt module ONCE and share it with the command registry, so the /ping command and
+// its component (Refresh/Retry) handlers use the SAME ScryptRestClient. Building it twice would
+// duplicate the clients and fragment live state (e.g. connectivity up/down tracking).
 const scrypt = buildScryptModule(env);
-const allCommands = buildCommandRegistry(env);
+const allCommands = buildCommandRegistry(env, scrypt);
 // Registers GuildMemberAdd (guest-role assignment) + the ready-time #welcome reconcile, and
 // returns the two button handlers the router dispatches the onboard: namespace to.
 const onboarding = buildOnboardingModule(env, client);
