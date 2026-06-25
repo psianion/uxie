@@ -18,6 +18,23 @@ export interface Logger {
   child(scope: Fields): Logger;
 }
 
+// A registered sink receives every emitted entry AFTER it is written to stdout, with `fields`
+// already redacted (reserved keys t/level/msg are surfaced on the entry, not in fields). Used to
+// mirror logs elsewhere (e.g. a Discord channel) — see lib/discord-log-sink.ts.
+export interface LogEntry {
+  level: Level;
+  msg: string;
+  t: string;
+  fields: Fields;
+}
+
+let sink: ((entry: LogEntry) => void) | null = null;
+let inSink = false; // re-entrancy guard: a sink that itself logs must not recurse.
+
+export function setLogSink(fn: ((entry: LogEntry) => void) | null): void {
+  sink = fn;
+}
+
 // UXIE-DISCORD-GUIDELINES §17.2 — never let secrets reach stdout.
 const REDACT_SUBSTRINGS = ["BOT_TOKEN", "AUTH", "SECRET", "KEY"] as const;
 const MAX_STRING = 2000;
@@ -69,14 +86,29 @@ function sanitize(value: unknown, seen: WeakSet<object>): unknown {
 
 function emit(level: Level, scope: Fields, msg: string, fields: Fields = {}) {
   const seen = new WeakSet<object>();
-  const merged: Fields = { t: new Date().toISOString(), level, msg };
+  const redacted: Fields = {};
   for (const [k, v] of Object.entries(scope)) {
-    merged[k] = shouldRedact(k) ? "[REDACTED]" : sanitize(v, seen);
+    redacted[k] = shouldRedact(k) ? "[REDACTED]" : sanitize(v, seen);
   }
   for (const [k, v] of Object.entries(fields)) {
-    merged[k] = shouldRedact(k) ? "[REDACTED]" : sanitize(v, seen);
+    redacted[k] = shouldRedact(k) ? "[REDACTED]" : sanitize(v, seen);
   }
+  const t = new Date().toISOString();
+  const merged: Fields = { t, level, msg, ...redacted };
   console.log(JSON.stringify(merged));
+
+  // Hand the entry to a registered sink, guarded so a faulty or self-logging sink can never throw
+  // out of emit or recurse into logging. The sink sees the same redacted fields as stdout.
+  if (sink && !inSink) {
+    inSink = true;
+    try {
+      sink({ level, msg, t, fields: redacted });
+    } catch {
+      // A sink fault must never break logging — swallow.
+    } finally {
+      inSink = false;
+    }
+  }
 }
 
 function make(scope: Fields): Logger {

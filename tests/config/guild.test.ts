@@ -106,4 +106,19 @@ describe("assertGuildConfig", () => {
     } as unknown as typeof guildConfig;
     expectReject(cfg, "unlockedChannelIds");
   });
+
+  test("accepts an empty logChannelId (sink disabled)", () => {
+    const cfg = { ...validConfig(), logChannelId: "" } as unknown as typeof guildConfig;
+    expect(() => assertGuildConfig(cfg)).not.toThrow();
+  });
+
+  test("accepts a valid non-empty logChannelId", () => {
+    const cfg = { ...validConfig(), logChannelId: CH1 } as unknown as typeof guildConfig;
+    expect(() => assertGuildConfig(cfg)).not.toThrow();
+  });
+
+  test("rejects a malformed non-empty logChannelId", () => {
+    const cfg = { ...validConfig(), logChannelId: "123" } as unknown as typeof guildConfig;
+    expectReject(cfg, "logChannelId");
+  });
 });

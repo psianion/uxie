@@ -17,6 +17,10 @@ export const guildConfig = {
   accessRequestsChannelId: "1519115092908707951",
   guestRoleId: "1519115363332259871",
 
+  // Owner-only live log channel for warn+error mirroring. Empty = disabled (sink OFF). Set to a
+  // private channel id to mirror logs there. Validated as a snowflake only when non-empty.
+  logChannelId: "1519677387397271602",
+
   // Roles a guest can request. Each renders as its own Components V2 Section on the welcome
   // picker (live role name + blurb + member count + a "Request" button accessory).
   pickableRoleIds: ["1519115759408779314", "1519115612578644018"],
@@ -66,6 +70,9 @@ export function assertGuildConfig(cfg: typeof guildConfig = guildConfig): void {
   assertSnowflake(cfg.welcomeChannelId, "welcomeChannelId");
   assertSnowflake(cfg.accessRequestsChannelId, "accessRequestsChannelId");
   assertSnowflake(cfg.guestRoleId, "guestRoleId");
+
+  // Optional: a blank logChannelId disables the log sink; only validate a non-empty value.
+  if (cfg.logChannelId) assertSnowflake(cfg.logChannelId, "logChannelId");
 
   // `as const` types the default pickableRoleIds.length as a literal; widen to number so the
   // empty-picker guard also covers configs passed in by callers/tests.

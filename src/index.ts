@@ -3,21 +3,32 @@
 // SIGTERM/SIGINT (decision 16): destroy the gateway connection, then exit(0).
 import { Events } from "discord.js";
 import { parseEnv } from "./lib/env.ts";
-import { assertGuildConfig } from "./config/guild.ts";
-import { log } from "./lib/log.ts";
+import { assertGuildConfig, guildConfig } from "./config/guild.ts";
+import { log, setLogSink } from "./lib/log.ts";
+import { createDiscordLogSink, type LogSinkChannel } from "./lib/discord-log-sink.ts";
 import { createDiscordClient } from "./bot/client.ts";
 import { handleInteraction } from "./bot/interaction-router.ts";
 import { buildScryptModule } from "./integrations/scrypt/index.ts";
 import { buildCommandRegistry } from "./bot/command-registry.ts";
 import { buildOnboardingModule } from "./integrations/onboarding/index.ts";
 
+// Active Discord log sink (set at ClientReady when guildConfig.logChannelId is configured). The
+// crash handlers flush it best-effort before exit so the last warn/error reaches the channel.
+let logSink: ReturnType<typeof createDiscordLogSink> | null = null;
+
+function flushSinkThenExit(code: number): void {
+  const done = logSink ? logSink.flush() : Promise.resolve();
+  const cap = new Promise<void>((res) => setTimeout(res, 1000)); // never hang the crash path
+  void Promise.race([done, cap]).finally(() => process.exit(code));
+}
+
 process.on("uncaughtException", (err) => {
   log.error("uncaughtException", { err });
-  process.exit(1);
+  flushSinkThenExit(1);
 });
 process.on("unhandledRejection", (reason) => {
   log.error("unhandledRejection", { err: reason });
-  process.exit(1);
+  flushSinkThenExit(1);
 });
 
 let env;
@@ -42,8 +53,25 @@ const allCommands = buildCommandRegistry(env);
 // returns the two button handlers the router dispatches the onboard: namespace to.
 const onboarding = buildOnboardingModule(env, client);
 
-client.once(Events.ClientReady, (c) => {
+client.once(Events.ClientReady, async (c) => {
   log.info("uxie ready", { tag: c.user.tag, guild: env.DISCORD_DEV_GUILD_ID });
+
+  // Attach the live log sink only if the operator pointed logChannelId at a real, sendable channel.
+  // On any failure, log to stdout (sink not yet attached) and leave mirroring off — boot continues.
+  if (guildConfig.logChannelId) {
+    try {
+      const ch = await c.channels.fetch(guildConfig.logChannelId);
+      if (ch && ch.isTextBased() && ch.isSendable()) {
+        logSink = createDiscordLogSink(ch as unknown as LogSinkChannel);
+        setLogSink(logSink.onEntry);
+        log.info("log sink attached", { channelId: guildConfig.logChannelId });
+      } else {
+        log.error("log sink channel not sendable", { channelId: guildConfig.logChannelId });
+      }
+    } catch (err) {
+      log.error("log sink channel fetch failed", { channelId: guildConfig.logChannelId, err });
+    }
+  }
 });
 
 client.on(Events.InteractionCreate, async (i) => {

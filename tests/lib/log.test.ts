@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
-import { createLogger } from "../../src/lib/log.ts";
+import { createLogger, setLogSink, type LogEntry } from "../../src/lib/log.ts";
 
 describe("logger", () => {
   let spy: ReturnType<typeof spyOn>;
@@ -8,6 +8,7 @@ describe("logger", () => {
   });
   afterEach(() => {
     spy.mockRestore();
+    setLogSink(null); // a leaked sink must not bleed across tests
   });
 
   test("emits JSON with level, msg, and fields", () => {
@@ -73,5 +74,42 @@ describe("logger", () => {
     const line = JSON.parse(spy.mock.calls[0][0]);
     expect(line.a.name).toBe("a");
     expect(line.a.self).toBe("[Circular]");
+  });
+
+  test("setLogSink receives redacted entries; null detaches", () => {
+    const seen: LogEntry[] = [];
+    setLogSink((e) => seen.push(e));
+    const log = createLogger();
+    log.error("boom", { DISCORD_BOT_TOKEN: "secret", n: 2 });
+    expect(seen.length).toBe(1);
+    expect(seen[0]!.level).toBe("error");
+    expect(seen[0]!.msg).toBe("boom");
+    expect(typeof seen[0]!.t).toBe("string");
+    expect(seen[0]!.fields.DISCORD_BOT_TOKEN).toBe("[REDACTED]");
+    expect(seen[0]!.fields.n).toBe(2);
+    expect("level" in seen[0]!.fields).toBe(false); // reserved keys excluded from fields
+    setLogSink(null);
+    log.error("again");
+    expect(seen.length).toBe(1); // detached
+  });
+
+  test("a throwing sink does not break log.*", () => {
+    setLogSink(() => {
+      throw new Error("sink fault");
+    });
+    const log = createLogger();
+    expect(() => log.warn("still works")).not.toThrow();
+    expect(spy).toHaveBeenCalled(); // stdout still written
+  });
+
+  test("a sink that logs does not recurse infinitely (re-entrancy guard)", () => {
+    let calls = 0;
+    const log = createLogger();
+    setLogSink(() => {
+      calls++;
+      log.info("from inside sink"); // must NOT re-enter the sink
+    });
+    log.error("trigger");
+    expect(calls).toBe(1);
   });
 });
