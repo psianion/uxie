@@ -7,7 +7,6 @@ const complete = {
   DISCORD_DEV_GUILD_ID: "g",
   DISCORD_OWNER_ID: "o",
   SCRYPT_SERVER_URL: "http://localhost:3777",
-  SCRYPT_MCP_URL: "http://localhost:3777/mcp",
   SCRYPT_AUTH: "b",
 };
 
@@ -24,7 +23,6 @@ describe("parseEnv", () => {
     "DISCORD_DEV_GUILD_ID",
     "DISCORD_OWNER_ID",
     "SCRYPT_SERVER_URL",
-    "SCRYPT_MCP_URL",
     "SCRYPT_AUTH",
   ])("throws ConfigError when %s is missing", (missing) => {
     const partial = { ...complete, [missing]: undefined };
@@ -63,41 +61,25 @@ describe("parseEnv", () => {
   });
 });
 
-// UX-SEC-002: the SCRYPT_AUTH bearer must never cross the wire in cleartext, so the Scrypt URLs
-// accept https:// to any host but http:// only to a loopback literal. A plaintext http:// to a
+// UX-SEC-002: the SCRYPT_AUTH bearer must never cross the wire in cleartext, so SCRYPT_SERVER_URL
+// accepts https:// to any host but http:// only to a loopback literal. A plaintext http:// to a
 // remote host fails boot (naming the field) rather than silently leaking the bearer.
 describe("parseEnv — Scrypt URL scheme enforcement (UX-SEC-002)", () => {
-  const urls = (server: string, mcp: string) => ({
-    ...complete,
-    SCRYPT_SERVER_URL: server,
-    SCRYPT_MCP_URL: mcp,
-  });
+  const url = (server: string) => ({ ...complete, SCRYPT_SERVER_URL: server });
 
   test("accepts http:// to a loopback host (localhost / 127.0.0.1 / [::1])", () => {
-    expect(() => parseEnv(urls("http://localhost:3777", "http://localhost:3777/mcp"))).not.toThrow();
-    expect(() => parseEnv(urls("http://127.0.0.1:3000", "http://127.0.0.1:3000/mcp"))).not.toThrow();
-    expect(() => parseEnv(urls("http://[::1]:3000", "http://[::1]:3000/mcp"))).not.toThrow();
+    expect(() => parseEnv(url("http://localhost:3777"))).not.toThrow();
+    expect(() => parseEnv(url("http://127.0.0.1:3000"))).not.toThrow();
+    expect(() => parseEnv(url("http://[::1]:3000"))).not.toThrow();
   });
 
   test("accepts any https:// host", () => {
-    expect(() =>
-      parseEnv(urls("https://scrypt.example.com", "https://scrypt.example.com/mcp")),
-    ).not.toThrow();
-    expect(() => parseEnv(urls("https://scrypt:3000", "https://scrypt:3000/mcp"))).not.toThrow();
+    expect(() => parseEnv(url("https://scrypt.example.com"))).not.toThrow();
+    expect(() => parseEnv(url("https://scrypt:3000"))).not.toThrow();
   });
 
   test("rejects http:// to a non-loopback host, naming SCRYPT_SERVER_URL", () => {
-    expect(() => parseEnv(urls("http://10.0.0.5:3000", "https://ok.example.com/mcp"))).toThrow(
-      /SCRYPT_SERVER_URL/,
-    );
-    expect(() => parseEnv(urls("http://scrypt:3000", "https://ok.example.com/mcp"))).toThrow(
-      /SCRYPT_SERVER_URL/,
-    );
-  });
-
-  test("rejects a non-loopback http:// MCP url, naming SCRYPT_MCP_URL", () => {
-    expect(() => parseEnv(urls("https://ok.example.com", "http://scrypt:3000/mcp"))).toThrow(
-      /SCRYPT_MCP_URL/,
-    );
+    expect(() => parseEnv(url("http://10.0.0.5:3000"))).toThrow(/SCRYPT_SERVER_URL/);
+    expect(() => parseEnv(url("http://scrypt:3000"))).toThrow(/SCRYPT_SERVER_URL/);
   });
 });

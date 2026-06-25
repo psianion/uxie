@@ -3,16 +3,15 @@ import { buildCommandRegistry } from "../../src/bot/command-registry.ts";
 import { buildScryptModule } from "../../src/integrations/scrypt/index.ts";
 import type { Env } from "../../src/lib/env.ts";
 
-// Minimal hand-built Env. buildScryptModule constructs a ScryptRestClient/ScryptMcpClient from
-// the URLs and a ping component handler — provide valid-URL strings so nothing throws at
-// construction. ALLOW_SCRYPT_RESTART:false keeps the restart deps unwired.
+// Minimal hand-built Env. buildScryptModule constructs a ScryptRestClient + a ping component
+// handler from the URL — provide a valid-URL string so nothing throws at construction.
+// ALLOW_SCRYPT_RESTART:false keeps the restart deps unwired.
 const env = {
   DISCORD_BOT_TOKEN: "tok",
   DISCORD_APP_ID: "app",
   DISCORD_DEV_GUILD_ID: "guild-1",
   DISCORD_OWNER_ID: "123",
   SCRYPT_SERVER_URL: "http://localhost:3777",
-  SCRYPT_MCP_URL: "http://localhost:3777/mcp",
   SCRYPT_AUTH: "auth",
   ALLOW_SCRYPT_RESTART: false,
   SCRYPT_RESTART_CMD: "docker compose restart scrypt",

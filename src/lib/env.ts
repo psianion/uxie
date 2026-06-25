@@ -43,7 +43,6 @@ const schema = z.object({
   DISCORD_DEV_GUILD_ID: z.string().min(1),
   DISCORD_OWNER_ID: z.string().min(1),
   SCRYPT_SERVER_URL: scryptUrl,
-  SCRYPT_MCP_URL: scryptUrl,
   SCRYPT_AUTH: z.string().min(1),
   ALLOW_SCRYPT_RESTART: bool.default(false),
   SCRYPT_RESTART_CMD: z.string().min(1).default("docker compose restart scrypt"),
