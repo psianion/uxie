@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ScryptRestClient } from "../../../src/integrations/scrypt/rest-client.ts";
 import { ScryptError } from "../../../src/lib/errors.ts";
+import { setLogSink, type LogEntry } from "../../../src/lib/log.ts";
 
 type FetchImpl = (input: any, init?: any) => Promise<Response>;
 
@@ -14,6 +15,18 @@ function withFetch(impl: FetchImpl) {
 
 function client() {
   return new ScryptRestClient("http://scrypt:3000", "bearer");
+}
+
+// Capture warn/error entries emitted during fn() via the log sink hook.
+async function captureLogs(fn: () => Promise<void>): Promise<LogEntry[]> {
+  const entries: LogEntry[] = [];
+  setLogSink((e) => entries.push(e));
+  try {
+    await fn();
+  } finally {
+    setLogSink(null);
+  }
+  return entries;
 }
 
 describe("ScryptRestClient.health", () => {
@@ -391,6 +404,64 @@ describe("ScryptRestClient.getDailyContext", () => {
     const restore = withFetch(async () => new Response(JSON.stringify({ recent_notes: "not-an-array" }), { status: 200 }));
     try {
       await expect(client().getDailyContext()).rejects.toMatchObject({ code: "scrypt_bad_response" });
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("ScryptRestClient.health connectivity transitions", () => {
+  test("logs a single warn on the down transition, silent on repeat-down probes", async () => {
+    const c = client();
+    const restore = withFetch(async () => {
+      throw new Error("ECONNREFUSED");
+    });
+    try {
+      const logs = await captureLogs(async () => {
+        await c.health(); // null -> down : logs once
+        await c.health(); // down -> down : silent
+        await c.health(); // down -> down : silent
+      });
+      const lost = logs.filter((l) => l.msg === "scrypt connectivity lost");
+      expect(lost.length).toBe(1);
+      expect(lost[0]!.level).toBe("warn");
+      expect(lost[0]!.fields.reason).toBe("unreachable");
+    } finally {
+      restore();
+    }
+  });
+
+  test("logs 'restored' once when it comes back up after being down", async () => {
+    const c = client();
+    let up = false;
+    const restore = withFetch(async () =>
+      up ? new Response("{}", { status: 200 }) : Promise.reject(new Error("down")),
+    );
+    try {
+      const logs = await captureLogs(async () => {
+        await c.health(); // null -> down : "lost"
+        up = true;
+        await c.health(); // down -> up : "restored"
+        await c.health(); // up -> up : silent
+      });
+      expect(logs.map((l) => l.msg)).toEqual([
+        "scrypt connectivity lost",
+        "scrypt connectivity restored",
+      ]);
+    } finally {
+      restore();
+    }
+  });
+
+  test("does NOT log when the first-ever probe is healthy (no news)", async () => {
+    const c = client();
+    const restore = withFetch(async () => new Response("{}", { status: 200 }));
+    try {
+      const logs = await captureLogs(async () => {
+        await c.health(); // null -> up : silent
+        await c.health(); // up -> up : silent
+      });
+      expect(logs.length).toBe(0);
     } finally {
       restore();
     }

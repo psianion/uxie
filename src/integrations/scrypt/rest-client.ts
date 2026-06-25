@@ -12,6 +12,7 @@
 // (scrypt-contract §3) and degrading to the raw path if no base URL is available.
 import { z } from "zod";
 import { ScryptError } from "../../lib/errors.ts";
+import { log } from "../../lib/log.ts";
 
 export type HealthReason = "unreachable" | "auth" | "server" | "timeout";
 
@@ -168,10 +169,21 @@ export class ScryptRestClient {
     return h;
   }
 
+  // Last observed connectivity (null = not yet probed). Scrypt's reachability is only ever
+  // observed through this probe, so up↔down transitions are logged here — once each — rather
+  // than on every probe; repeat-down probes (e.g. the /ping auto-retry loop) stay silent.
+  private lastHealthy: boolean | null = null;
+
   // REST health probe used by /ping (Design §6.7). Scrypt exposes no /api/health, so we
   // hit the shallow GET /api/daily_context. Degrade-don't-crash: returns {ok,reason}
   // and never throws, so /ping always replies even when scrypt is down.
   async health(): Promise<HealthResult> {
+    const result = await this.probeHealth();
+    this.noteTransition(result);
+    return result;
+  }
+
+  private async probeHealth(): Promise<HealthResult> {
     try {
       const res = await fetch(`${this.baseUrl}/api/daily_context`, {
         method: "GET",
@@ -187,6 +199,19 @@ export class ScryptRestClient {
         return { ok: false, reason: "timeout" };
       }
       return { ok: false, reason: "unreachable" };
+    }
+  }
+
+  // Log only when reachability flips, so the operator's log channel (warn+error) shows Scrypt
+  // going down and coming back without a line per probe. A first-ever healthy probe is no news.
+  private noteTransition(result: HealthResult): void {
+    if (result.ok === this.lastHealthy) return;
+    const first = this.lastHealthy === null;
+    this.lastHealthy = result.ok;
+    if (!result.ok) {
+      log.warn("scrypt connectivity lost", { reason: result.reason });
+    } else if (!first) {
+      log.warn("scrypt connectivity restored");
     }
   }
 
