@@ -37,17 +37,17 @@ Discord **REST API v10**. Runtime is **Bun**, not Node.
 | 1 | <https://discord.com/developers/applications> | Click **New Application**, name it `uxie`, accept ToS, **Create** | The app |
 | 2 | App → **General Information** | Copy **Application ID** | `DISCORD_APP_ID` |
 | 3 | App → **Bot** | Click **Reset Token** → confirm → **Copy** (shown once) | `DISCORD_BOT_TOKEN` |
-| 4 | App → **Bot** → *Privileged Gateway Intents* | **Enable `MESSAGE CONTENT INTENT`**. Leave *Presence* and *Server Members* **OFF**. **Save Changes** | Lets the owner @-mention handler read message bodies |
+| 4 | App → **Bot** → *Privileged Gateway Intents* | **Enable `SERVER MEMBERS INTENT`**. Leave *Presence* and *Message Content* **OFF**. **Save Changes** | Lets onboarding receive `GuildMemberAdd` on join |
 | 5 | App → **Installation** (or legacy **OAuth2 → URL Generator**) | Build the invite URL (Part C below) | Invite link |
 
 ### Intents this bot needs (must match `src/bot/client.ts`)
-- `Guilds` — receives slash-command interactions. *(not privileged)*
-- `GuildMessages` — receives owner @-mention `messageCreate` server-wide. *(not privileged)*
-- `MessageContent` — **privileged**, toggled in step 4 above. Without it,
-  the owner @-mention handler cannot read the message body.
+- `Guilds` — receives slash-command + button interactions. *(not privileged)*
+- `GuildMembers` — **privileged**, toggled in step 4 above. Without it,
+  onboarding's `GuildMemberAdd` listener never fires, so joiners get no guest role.
 
-> Intentionally **NOT** enabled: *Presence Intent*, *Server Members Intent*,
-> DirectMessages — minimum attack surface (ratified design decision 6).
+> Intentionally **NOT** enabled: *Presence Intent*, *Message Content Intent*,
+> DirectMessages — minimum attack surface (ratified design decision 6). Sending
+> DMs (onboarding grant notices) needs no intent.
 
 ---
 
@@ -59,11 +59,8 @@ uxie's privileged surface is owner-only (`DISCORD_OWNER_ID`):
   owner-only server-admin commands `/create-category`, `/create-channel`, `/create-role` defer, then
   `editReply` with a Components V2 container and `flags: MessageFlags.Ephemeral` — private to you.
 - **Onboarding is event-driven** (not a command): new members get a guest role + a welcome role
-  picker; a request posts an owner-reviewed Approve/Deny card. See `src/integrations/onboarding/`.
-  Anyone who is not the owner (or an `@everyone`/role ping) is silently ignored. Later this
-  becomes an agentic parser that interprets your message and routes it.
-
-There is no dedicated `#inbox` channel anymore.
+  picker; a role request posts an owner-reviewed Approve/Deny card to the access-requests channel,
+  and an owner-gated grant DMs the member. See `src/integrations/onboarding/`.
 
 ---
 
@@ -142,8 +139,8 @@ only once and must never be pasted into a chat).
 5. Click **Reset Token**, confirm in the dialog. The token appears once.
    **STOP → tell the operator to copy it now and store it as `DISCORD_BOT_TOKEN`**
    (do not echo the token back into the conversation).
-6. Scroll to **Privileged Gateway Intents**. Toggle **MESSAGE CONTENT INTENT**
-   **ON**. Leave *Presence Intent* and *Server Members Intent* **OFF**. Click
+6. Scroll to **Privileged Gateway Intents**. Toggle **SERVER MEMBERS INTENT**
+   **ON**. Leave *Presence Intent* and *Message Content Intent* **OFF**. Click
    **Save Changes**.
 7. In the address bar, **navigate** to the invite URL, substituting the app id:
    `https://discord.com/api/oauth2/authorize?client_id=<DISCORD_APP_ID>&scope=bot%20applications.commands&permissions=8`
@@ -151,10 +148,10 @@ only once and must never be pasted into a chat).
    operator's **test server**, click **Continue**, confirm **Administrator** is ticked,
    click **Authorize**, solve any captcha. **STOP if captcha/MFA blocks.**
 9. **Report back** to the operator a checklist: `DISCORD_APP_ID` captured ✅,
-   `DISCORD_BOT_TOKEN` captured ✅, MESSAGE CONTENT INTENT enabled ✅, bot invited
+   `DISCORD_BOT_TOKEN` captured ✅, SERVER MEMBERS INTENT enabled ✅, bot invited
    to the server ✅.
 10. Remind the operator that **three IDs are NOT in the portal** and must be
     copied from the Discord desktop app with Developer Mode on:
     `DISCORD_DEV_GUILD_ID`, `DISCORD_OWNER_ID` (see Part D).
 
-When all eight `.env` values are filled, run Part F.
+When the `.env` values from Part E are filled, run Part F.

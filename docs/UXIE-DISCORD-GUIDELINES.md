@@ -1,7 +1,7 @@
 # Uxie — Discord Bot Guidelines (v1, SUP integration)
 
 > **Status:** Living. Lock decisions here *before* code. Implementation deviations require updating this doc first.
-> **Last updated:** 2026-04-26
+> **Last updated:** 2026-06-25
 > **Maintainer:** sainayan.mahto@goveva.com
 > **Audience:** anyone writing or reviewing uxie code, slash commands, or integration modules.
 > **Inputs:** `docs/SUP-GUIDELINES.md` (system-wide rules), `docs/discordjs-research.md` (discord.js v14.26.2 facts), `docs/superpowers/specs/2026-04-14-uxie-design.md` (design spec), `docs/superpowers/plans/2026-04-14-uxie.md` (task plan).
@@ -10,11 +10,12 @@
 
 ## 1. Purpose & scope
 
-Uxie is the **User plane** of SUP. One Bun process, one Discord bot, one operator. Its only job is to translate Discord input into:
+Uxie is the **User plane** of SUP. One Bun process, one Discord bot, one operator. Today it does two things:
 
-- **writes** to Scrypt's REST (`POST /api/ingest`)
-- **reads** from Scrypt's MCP (`searchNotes`, `semanticSearch`, `getNote`)
-- *(future)* **ops calls** to Para-RAID's `/v1/ops/*`
+- **onboarding** — event-driven guest onboarding (no slash commands): a guest role on `GuildMemberAdd`, a Components V2 welcome role-picker, and an owner-reviewed role-request flow. See `src/integrations/onboarding/README.md`.
+- **server admin + Scrypt ops** — owner-gated slash commands (`/create-category`, `/create-channel`, `/create-role`) and `/ping`, a Scrypt health panel backed by a REST health probe.
+- *(deferred)* **Scrypt capture/query** — pending Scrypt's ingestion rework; see §12 and `src/integrations/scrypt/README.md`.
+- *(future)* **ops calls** to Para-RAID's `/v1/ops/*`.
 
 It owns no persistent state. It runs no business logic. It is a **translation layer with an error boundary**, nothing more.
 
@@ -41,7 +42,7 @@ A plane violation is a blocker, not a nit.
 - **Language:** TypeScript, `strict: true`.
 - **Test runner:** `bun test`.
 - **Discord.js:** `^14.26` (pinned to the v14.26 line). Do **not** adopt v15 pre-release.
-- **MCP client:** hand-rolled per-call JSON-RPC `POST` over Bun `fetch` (no `@modelcontextprotocol/sdk`); one `tools/call` per read, `AbortSignal.timeout(10_000)`, zod-parse the response. Dep set stays `discord.js` + `zod`.
+- **MCP client:** *(removed — deferred)* the hand-rolled JSON-RPC MCP read client was deleted with the capture/query surface (commit `e963939`); the Scrypt v2 rebuild will re-decide its transport. Dep set stays `discord.js` + `zod`.
 - **Validation:** `zod` for env + every external boundary parse (Discord input, Scrypt response).
 - **No voice.** `@discordjs/voice` is incompatible with Bun (oven-sh/bun#11313). Voice features are deferred until either Bun fixes opus loading or a clear voice-into-scrypt requirement arrives.
 
@@ -64,23 +65,22 @@ A plane violation is a blocker, not a nit.
 
 ---
 
-## 5. Gateway intents — minimum, with v1.5 path
+## 5. Gateway intents — minimum
 
-**These intents are UNCHANGED** from the original `#inbox`-era design; only the `messageCreate` handler logic changed (from inbox-channel gate to owner @-mention gate).
+The intent set is the bot's security posture; keep it minimal. Current set (`src/bot/client.ts`):
 
 ```ts
-// v1 — slash commands + owner @-mention server-wide
 intents: [
-  GatewayIntentBits.Guilds,           // required for interactionCreate
-  GatewayIntentBits.GuildMessages,    // receive messageCreate for owner @-mention
-  GatewayIntentBits.MessageContent,   // PRIVILEGED — must enable in dev portal
+  GatewayIntentBits.Guilds,        // interactionCreate (slash commands + buttons)
+  GatewayIntentBits.GuildMembers,  // PRIVILEGED — guildMemberAdd for onboarding's guest role
 ],
-partials: [Partials.Channel, Partials.Message],
+allowedMentions: { parse: [], repliedUser: false }, // echoed text never pings
+// No partials: onboarding state rides on button customIds, not reactions/messages.
 ```
 
-- **Drop `DirectMessages` from v1.** All capture happens in slash commands; the owner @-mention handler is guild-only. DMs add an attack surface and another partial.
-- **`MessageContent` is privileged but free** for unverified bots (<100 guilds). Enable in the Discord Developer Portal once.
-- **Do not add `GuildMembers`.** Single-user bot doesn't need member events.
+- **`GuildMembers` is privileged** — enable **SERVER MEMBERS INTENT** in the Developer Portal once. It's the only privileged intent uxie uses, needed for `guildMemberAdd`.
+- **No message intents.** `MessageContent` is **not** used and must **not** be enabled — uxie reads no message bodies. `GuildMessages`/`DirectMessages` are likewise off; sending DMs (onboarding grant notices) needs no intent.
+- **No `Presence`.** Single-user bot doesn't need presence events.
 - **Adding intents requires a doc bump here.** The privileged-intent set is part of the bot's security posture.
 
 ---
@@ -106,17 +106,12 @@ export type LoadedCommand = {
 
 ```ts
 new SlashCommandBuilder()
-  .setName("capture")
-  .setDescription("Capture a thought into scrypt")
+  .setName("create-role")
+  .setDescription("Create a role")
   .setContexts(InteractionContextType.Guild)             // explicit
   .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
   .setDefaultMemberPermissions(0n)                        // owner-only via runtime gate
-  .addStringOption(o => o.setName("text").setDescription("the content").setRequired(true))
-  .addStringOption(o => o.setName("kind").setDescription("note | thought | idea").setChoices(
-    { name: "note", value: "note" },
-    { name: "thought", value: "thought" },
-    { name: "idea", value: "idea" },
-  ));
+  .addStringOption(o => o.setName("name").setDescription("role name").setRequired(true));
 ```
 
 - Always `setContexts` and `setIntegrationTypes`. Never rely on defaults — they have changed across discord API versions.
@@ -130,17 +125,17 @@ new SlashCommandBuilder()
 
 ### 6.4 Autocomplete
 
-- Use for `/search` and `/ask` once we have query history. Respond within 3s, ≤25 choices.
+- A candidate for the deferred Scrypt query commands (e.g. search) once they exist and we have query history. Respond within 3s, ≤25 choices.
 - Autocomplete handlers live next to the command in the same file, exported as `autocomplete(i)`.
-- **No autocomplete for v1.** Add when query reuse pain shows up.
+- **No autocomplete today.** Add when query reuse pain shows up.
 
 ### 6.5 Modals
 
-- Use for `/journal` if the input is multi-line or templated. v1 keeps `/journal` as a single-string command (one option). Modals are a v1.5 ergonomics improvement.
+- A candidate for any future multi-line/templated capture input. Not used today.
 
 ### 6.6 Context-menu commands
 
-- Right-click "Capture to Scrypt" on any message is a future delight. v1 ships slash commands + owner @-mention only.
+- Right-click "Capture to Scrypt" on any message is a future delight, part of the deferred Scrypt v2 surface. The current surface is slash commands + event-driven onboarding only.
 
 ---
 
@@ -148,29 +143,28 @@ new SlashCommandBuilder()
 
 | Step | Rule |
 |---|---|
-| First line of `execute` | `await interaction.deferReply({ flags: MessageFlags.Ephemeral })` for any handler that touches Scrypt. |
+| First line of `execute` | `await interaction.deferReply({ flags: MessageFlags.Ephemeral })` for any handler that does network I/O (incl. `/ping`'s Scrypt probe). A Components V2 reply must set `IsComponentsV2` at reply time, so defer first, then `editReply`. |
 | Deferred response window | 15 minutes. Edit via `editReply`. Append via `followUp`. |
-| Non-deferred reply | Only for `/ping` or trivially synchronous commands. Must complete in <3s. |
-| Streaming progress | `editReply` with step text ("Searching scrypt…", "Got 12 hits, ranking…"). **Edits must be ≥1s apart** to stay under per-route rate budget. |
+| Non-deferred reply | Only for a trivially synchronous handler that does no I/O and completes in <3s. |
+| Streaming progress | `editReply` with step text. **Edits must be ≥1s apart** to stay under per-route rate budget. |
 | Final attachment | If output >1500 chars or contains code fences, post as a `.md` file attachment. Mobile renders markdown attachments natively. |
 
-**Rule:** the moment an interaction handler does anything non-trivially async, the first line is `deferReply`. No exceptions other than `/ping`.
+**Rule:** the moment an interaction handler does anything non-trivially async, the first line is `deferReply`. A non-owner is rejected before the defer (§17.3).
 
 ---
 
-## 8. Embed vs Components V2 — when to use each
+## 8. Components V2 — the UI default
 
-### Default: classic embeds, ephemeral
+### Default: Components V2, ephemeral
 
-- v1 ships every command with classic embeds + `flags: MessageFlags.Ephemeral`.
+- The UI is **Components V2 everywhere** — `/ping`'s health panel, the onboarding welcome role-picker and Approve/Deny cards, every owner-gated reply. Slash-command output is `flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral`.
 - Ephemeral replies don't count against rate limits and aren't visible to anyone else — perfect for personal tool output.
-- Limits to remember: title 256, description 4096, fields per embed 25, total chars per message 6000.
+- Required mental flip: V2 messages are **mutually exclusive** with `content` and `embeds`. Pick one world per message; you cannot mix (this is also an anti-pattern, §22).
 
-### Upgrade to Components V2 when
+### Shapes to reach for
 
-- The output has clear "row + accessory" shape (a note title + an "Open" button).
-- You need >6000 chars or want grid imagery.
-- Required mental flip: V2 messages are **mutually exclusive** with `content` and `embeds`. Pick one world per message; you cannot mix.
+- "Row + accessory" output (a title + an "Open"/action button) → `SectionBuilder` with a button accessory.
+- Grouped panels with an accent bar → `ContainerBuilder`.
 
 ```ts
 await interaction.editReply({
@@ -189,21 +183,16 @@ await interaction.editReply({
 
 ### Mobile rules
 
-- **No 3-column inline embed fields** — phones collapse to 2-wide and they wrap badly.
-- **Footer text is invisible at thumbnail size.** Don't put information there.
-- **`setURL` on the embed title** gives a tappable header — use it whenever there's a canonical link.
+- **Don't pack wide multi-column layouts** — phones wrap them badly. Keep rows to title + one accessory.
+- **Put information in text displays, not decoration** — small accent/footer-style trim is invisible at thumbnail size.
+- **Use a Link-style button** when there's a canonical URL — it gives a tappable target on mobile.
 - **Don't paste raw code blocks >40 lines** — attach as `.md` instead.
 
 ---
 
 ## 9. Owner @-mention trigger
 
-Server-wide, owner-only mention handling via `messageCreate`.
-
-- `messageCreate` handler: if the message is not a direct bot mention (`msg.mentions.has(client.user)`) → ignore. If the mention is `@everyone` or a role ping → ignore. If `msg.author.id !== env.DISCORD_OWNER_ID` → ignore silently.
-- On a valid owner @-mention: reply in-channel with a help overview embed listing all six commands (`/ping`, `/capture`, `/search`, `/ask`, `/journal`, `/brief`), then delete that reply after ~30s using a transient `setTimeout`. No state is retained.
-- There is no dedicated `#inbox` channel. Note capture uses the `/capture` slash command.
-- **Future:** this handler becomes an agentic parser that interprets the owner's free-text message and routes it to the appropriate command or module.
+**(Removed — commit `e963939`.)** The owner @-mention trigger and its help-overview reply no longer exist; the bot enables no message intents (§5) and reads no message bodies. The owner-facing surface is now slash commands (§6) plus event-driven onboarding. An agentic free-text router may return in a later phase, but it is not part of the current design.
 
 ---
 
@@ -221,72 +210,63 @@ For multi-turn flows (planned: `/research <topic>`, `/draft <intent>`):
 
 ## 11. Module pattern — pluggable integrations
 
+Each module owns its folder and carries a `README.md` (the per-module source of truth). For specifics see `src/integrations/*/README.md`.
+
 ```
 src/
 ├── bot/                       # discord.js glue (router, client, deploy)
 │   ├── client.ts
 │   ├── command-loader.ts
-│   ├── interaction-router.ts
-│   └── message-router.ts
+│   └── interaction-router.ts  # the one interaction catch-site (commands + buttons)
 ├── integrations/
-│   ├── scrypt/                # v1 active module
-│   │   ├── rest-client.ts     # ScryptRestClient: health, ingest, getDailyContext
-│   │   ├── mcp-client.ts      # ScryptMcpClient: searchNotes, semanticSearch, getNote
-│   │   ├── channels.ts        # isInboxChannel(id, env)
-│   │   ├── inbox-handler.ts
-│   │   ├── orchestrator-stub.ts  # dispatch() throws — seam for para-raid
-│   │   └── commands/
-│   │       ├── ping.ts
-│   │       ├── capture.ts
-│   │       ├── search.ts
-│   │       ├── ask.ts
-│   │       ├── journal.ts
-│   │       └── brief.ts
-│   └── para-raid/             # placeholder; populated when ops console ships
+│   ├── onboarding/            # event-driven; no slash commands (GuildMemberAdd + buttons)
+│   ├── server/                # /create-category, /create-channel, /create-role
+│   └── scrypt/                # /ping health panel + rest-client (capture/query deferred — §12)
+│       ├── rest-client.ts     # ScryptRestClient: health() probe + connectivity tracking
+│       ├── ping/              # ping model + button handler
+│       └── commands/ping.ts
 └── lib/                       # shared, integration-agnostic
     ├── env.ts                 # zod-validated config
     ├── errors.ts              # UxieError taxonomy
     ├── log.ts                 # structured JSON to stdout
-    ├── tz.ts                  # USER_TZ helpers for /journal
-    └── embed.ts               # render helpers
+    ├── discord-log-sink.ts    # mirrors warn+error to the owner log channel
+    └── auth.ts                # assertOwner
 ```
 
 ### Rules
 
 - **`bot/` knows about `lib/`, never about a specific integration.**
-- **Each integration owns its REST/MCP clients.** No shared "scrypt-or-paraRaid" client abstraction. Two integrations = two clients.
-- **`lib/embed.ts`** holds renderers parameterized by data shape, not by integration. Renderers stay pure (no IO).
+- **Each integration owns its clients.** No shared "scrypt-or-paraRaid" client abstraction. Two integrations = two clients.
+- **Render helpers stay pure (no IO)** and are parameterized by data shape, not by integration.
 - **An integration is one folder.** Ripping out scrypt should mean deleting `integrations/scrypt/`, dropping its commands from the loader, and nothing else.
 
 ---
 
 ## 12. Scrypt integration contract
 
-### 12.1 Writes — REST
+> **Capture/query is DEFERRED.** The capture/query surface and its clients (REST `ingest()`/`getDailyContext()`, the MCP read client) were removed in commit `e963939` pending Scrypt's ingestion rework (Scrypt-side: `feat/ingestion-rework` merged, `feat/journal-rework` in progress). **Do not re-wire against the old contract.** The §12.1–12.3 contract below is retained as the *target* for the v2 rebuild; only the health probe (§12.1) and failure handling (§12.4) are live today. See `src/integrations/scrypt/README.md` and `docs/research/scrypt-contract.md`.
+>
+> What survives now: the health probe (`ScryptRestClient.health()`), the typed-error seam (`ScryptError` in `src/lib/errors.ts` + the router's `scrypt error` branch), and the auth/timeout rules below.
 
-- Endpoint: `POST {SCRYPT_SERVER_URL}/api/ingest`
-- Auth: `Authorization: Bearer ${SCRYPT_AUTH}` over Tailscale (TCP).
-- Body shape (per `/scrypt/src/server/api/ingest.ts`): `{ kind, content, client_tag, ...kindSpecific }`.
-- **Every write carries a `client_tag`.** v1 uses a deterministic tag: `uxie-<interaction.id>` for slash commands; the `uxie-msg-<msg.id>` form (via the retained `makeMessageClientTag` helper) is reserved for owner @-mention-originated Scrypt writes (the future agentic path). The same value is the log scope field and `X-Correlation-Id`. Scrypt is idempotent on `client_tag`.
-- **Path/slug ownership stays with Scrypt.** Uxie does not pass `path` or `slug`.
-- Timeout: **10s default** for all Scrypt REST/MCP calls (per Design §304); the lightweight `/ping` health probe uses **500ms**. Over budget → `ScryptTimeoutError` → user-friendly ephemeral reply.
+### 12.1 Writes — REST *(deferred — v2 target)*
 
-### 12.2 Reads — MCP
+- Live today: only the **health probe** — `GET {SCRYPT_SERVER_URL}/api/daily_context` with **500ms** `AbortSignal.timeout`, degrades-don't-crash (returns `{ ok, reason }`, never throws). (The `/api/daily_context` path predates the rework — revisit as part of v2.)
+- Auth (all calls): `Authorization: Bearer ${SCRYPT_AUTH}`. The URL must be `https://` or `http://` to a loopback host only (boot-enforced, UX-SEC-002), so the bearer never leaks over plaintext.
+- v2 target: writes go to `POST {SCRYPT_SERVER_URL}/api/ingest`, carry a deterministic idempotency `client_tag`, and leave **path/slug ownership with Scrypt** (uxie does not pass `path`/`slug`). Re-confirm the body shape against the new ingest `router`/`kinds` when rebuilding.
 
-- Transport: hand-rolled `POST {SCRYPT_MCP_URL}` JSON-RPC `tools/call` with `Authorization: Bearer ${SCRYPT_AUTH}` + `Content-Type: application/json`. No SDK. (Pending Phase-0 confirmation that the server accepts a cold `tools/call` with no `initialize` handshake.)
-- Tools allowed v1: `searchNotes`, `semanticSearch`, `getNote`.
-- Tools forbidden v1: any write tool (`create_note`, `update_note_metadata`, `add_edge`, etc.) — writes go through REST. Mixing the two creates two write paths and breaks idempotency reasoning.
-- Connection lifecycle: **lazy, per-call**. The MCP client opens the streamable-http stream when called and closes after the response. Do not keep a long-lived MCP connection — its failure modes are harder to reason about than reconnecting per call.
+### 12.2 Reads — MCP *(removed — deferred)*
 
-### 12.3 `/api/daily_context`
+- The hand-rolled JSON-RPC MCP read client (`searchNotes`/`semanticSearch`/`getNote`) and `SCRYPT_MCP_URL` were removed with the capture/query surface. The v2 rebuild re-decides the read transport (Scrypt now exposes a `batch-ingest` MCP tool); the **reads-never-write** split (writes via REST, reads never mutate) stays the rule when it returns.
 
-- Used by `/brief`. GET, no body. Response is `{ today_journal, recent_notes[], open_threads[], active_memories[], tag_cloud[] }`.
-- This endpoint is the only Scrypt read that goes via REST (not MCP) because it's a composed projection that doesn't fit the MCP tool model.
+### 12.3 `/api/daily_context` *(deferred — v2 target)*
+
+- The composed daily-context projection (a `/brief`-style read over REST, not MCP) is part of the deferred surface. When rebuilt it targets the new `/api/daily-context` endpoint.
 
 ### 12.4 Failure handling
 
-- **Scrypt down → degrade, don't crash.** `/ping` reports degraded. Other commands ephemerally reply "scrypt is down — try again in a minute." Bot stays connected to Discord.
-- **Token rejected (401) → loud failure.** Ephemeral reply naming the env var. This is a misconfiguration, not a transient.
+- **Scrypt down → degrade, don't crash.** `/ping` reports degraded and always renders. The bot stays connected to Discord; it never crashes on a Scrypt fault.
+- **Connectivity logging.** `health()` logs one `warn` on each up↔down flip (`scrypt connectivity lost` / `restored`), mirrored to the owner log channel (§18). Repeat-down probes stay silent.
+- **Typed errors stay the seam.** Scrypt-side faults map to `ScryptError` subclasses (`ScryptTimeoutError` retryable, `ScryptAuthError` not); the router's `scrypt error` branch turns them into ephemeral replies. This seam is kept live for the v2 rebuild even though no command currently throws into it.
 
 ---
 
@@ -321,11 +301,10 @@ export class ScryptBadRequestError extends ScryptError {}
 
 Specific subclasses for retryability — `Timeout` is retryable, `Auth` is not.
 
-### 14.2 Catch sites — exactly three
+### 14.2 Catch sites
 
-1. **`bot/interaction-router.ts`** — wraps `command.execute` in `try/catch`. Maps known errors to ephemeral user messages; logs unknowns.
-2. **`bot/message-router.ts`** — wraps `messageCreate` handlers. Reacts ❌ on failure.
-3. **`src/index.ts`** — top-level `process.on('uncaughtException' | 'unhandledRejection')` → log + exit non-zero. Systemd / Docker restarts.
+1. **`bot/interaction-router.ts`** — the single interaction catch-site. Wraps command `execute` and onboarding button handlers in `try/catch`; maps known errors to ephemeral user messages, logs unknowns.
+2. **`src/index.ts`** — top-level `process.on('uncaughtException' | 'unhandledRejection')` → log + exit non-zero. Systemd / Docker restarts.
 
 **No `try/catch` inside command bodies.** Throw with the right error class; the router decides the user-visible message. Multi-catch within a command is a code smell.
 
@@ -347,9 +326,8 @@ All ephemeral. Never expose stack traces to Discord.
 
 - **No in-memory caches** of vault content, search results, or user state across interactions.
 - **No on-disk storage** outside what Bun and discord.js need (the gateway sequence file).
-- **No queue.** A capture either succeeds or fails via `/capture`; the user can retry.
-- **No scheduler.** Cron lives in Para-RAID.
-- **Carve-out:** the owner @-mention help reply uses a `~30s setTimeout` to self-delete. This is a transient UX timer scoped to a single Discord message object — not a scheduler, queue, or cron. It holds no application state and does not survive a restart.
+- **No queue.** Each interaction either succeeds or fails; the user can retry.
+- **No scheduler.** Cron lives in Para-RAID. (The `/ping` auto-retry button uses a transient per-message timer scoped to a single Discord interaction — not a scheduler; it holds no application state and does not survive a restart.)
 
 If Scrypt is down for 10 minutes, Uxie should:
 - Stay connected to Discord (keep gateway open).
@@ -378,14 +356,18 @@ If Scrypt is down for 10 minutes, Uxie should:
 Required fields:
 
 ```ts
+// Required (no default — boot fails if missing):
 DISCORD_BOT_TOKEN          // from Developer Portal
 DISCORD_APP_ID             // application id
 DISCORD_DEV_GUILD_ID       // your test guild
 DISCORD_OWNER_ID           // your user id — owner gate
-SCRYPT_SERVER_URL          // e.g. http://scrypt.tail-xxxx.ts.net:3000
-SCRYPT_MCP_URL             // e.g. http://scrypt.tail-xxxx.ts.net:3000/mcp
+SCRYPT_SERVER_URL          // https://… or http:// to a loopback host only (UX-SEC-002); e.g. http://localhost:3777
 SCRYPT_AUTH                // bearer token, 32-byte hex
-USER_TZ                    // IANA tz, e.g. "Asia/Kolkata"
+
+// Optional (have defaults):
+UXIE_ENV                   // deployment label in /ping's Host row; default "local"
+ALLOW_SCRYPT_RESTART       // gate the /ping Restart Scrypt button; default false
+SCRYPT_RESTART_CMD         // fixed-argv restart command; default "docker compose restart scrypt"
 ```
 
 ### 17.2 Loading
@@ -397,36 +379,34 @@ USER_TZ                    // IANA tz, e.g. "Asia/Kolkata"
 ### 17.3 Owner gate
 
 ```ts
-// src/lib/auth.ts
-function assertOwner(actorId: string, ownerId: string) {
-  if (actorId !== ownerId) throw new NotOwnerError(`rejected user ${actorId}`);
-}
+// src/lib/auth.ts — assertOwner(interaction, ownerId)
+// throws NotOwnerError (with a stable code) when interaction.user.id !== ownerId
 ```
 
-**Router-located, not in command bodies.** `assertOwner` fires inside `bot/interaction-router.ts` and `bot/message-router.ts` BEFORE `deferReply`/`execute` — so a non-owner is rejected before any work and the command body never re-checks. The non-owner pre-defer path replies "not for you" ephemerally (`reply`, not `editReply`).
+**Router-located, not in command bodies.** `assertOwner` fires inside `bot/interaction-router.ts` BEFORE `deferReply`/`execute` — so a non-owner is rejected before any work and the command body never re-checks. The non-owner pre-defer path replies "not for you" ephemerally (`reply`, not `editReply`).
 
 ---
 
 ## 18. Logging & observability
 
-- **Structured JSON to stdout.** One log line = one event. Keys: `t`, `level`, `msg`, plus event-specific fields.
+- **Structured JSON to stdout.** One log line = one event. Keys: `t`, `level`, `msg`, plus event-specific fields. `src/lib/log.ts`.
 - **Levels:** `debug | info | warn | error`. `error` includes a stack.
 - **`interactionId` field** on every log line emitted within a command — lets you grep one user invocation end-to-end.
-- **No telemetry exporters in v1.** Journald + `journalctl -u uxie -f` per SUP §4. If we ever need histograms, Para-RAID is the place to aggregate.
+- **Discord log sink.** `warn`+`error` lines are mirrored to an owner-only Discord channel (`guildConfig.logChannelId`) via `src/lib/discord-log-sink.ts` — pure/injectable, and it never re-logs its own send failures (no feedback loop).
+- **No telemetry exporters.** Journald + `journalctl -u uxie -f` per SUP §4. If we ever need histograms, Para-RAID is the place to aggregate.
 
 ---
 
 ## 19. Testing posture
 
-- **Unit-test pure functions:** env parser, embed renderers, channel filter, error mapping, tz helpers.
-- **Mock at the seam:** `fetch` for REST, `Transport` for MCP. `tests/helpers.ts` exposes `withFetch(impl)` and `fakeInteraction()`.
+- **Unit-test pure functions:** env parser, the `/ping` probe→`StatusModel` mapping, error mapping, the onboarding role-pick/approval logic, the log sink.
+- **Mock at the seam:** `fetch` for the Scrypt health probe; inject the channel/timer into the log sink; `tests/helpers.ts` exposes `withFetch(impl)` and `fakeInteraction()`.
 - **Don't test discord.js itself.** No connecting a real client in tests.
-- **Smoke ritual** is the v1 acceptance:
+- **Smoke ritual:**
   1. Boot uxie locally against a real bot token.
-  2. `/ping` → degraded if Scrypt down, healthy otherwise.
-  3. `/capture` → note appears in vault.
-  4. @-mention uxie in any channel → help overview reply appears, auto-deletes after ~30s.
-  5. `/search`, `/ask`, `/journal`, `/brief` each return non-empty embeds.
+  2. `/ping` → degraded if Scrypt down, healthy otherwise; Refresh/Retry/Details buttons work.
+  3. A new member joins → guest role assigned; welcome role-picker is reachable; a role request posts an Approve/Deny card to the access-requests channel; owner approve grants + DMs.
+  4. `/create-category`, `/create-channel`, `/create-role` each succeed for the owner and are rejected for a non-owner.
 
 Smoke is documented in `docs/superpowers/specs/2026-04-14-uxie-design.md` §8.4.
 
@@ -469,9 +449,9 @@ Smoke is documented in `docs/superpowers/specs/2026-04-14-uxie-design.md` §8.4.
 | Anti-pattern | Reason |
 |---|---|
 | Public bot mode (any non-owner can use commands) | Plane breach + threat model. |
-| In-memory cache of search results between interactions | Stateless rule. |
-| Long-lived MCP connection across interactions | Reconnection failure modes are harder than per-call. |
-| Mixing classic content/embeds with Components V2 in one message | Discord rejects it; runtime error. |
+| In-memory cache of vault/query results between interactions | Stateless rule. |
+| Re-wiring the deleted Scrypt capture/query clients against the old contract | Deferred pending the ingestion rework — rebuild against the new contract (§12). |
+| Mixing `content`/`embeds` with Components V2 in one message | Discord rejects it; runtime error. |
 | Direct vault writes (`fs.writeFile` on `/vault`) | Plane breach §3 of SUP-GUIDELINES. |
 | Cross-module imports (`integrations/scrypt` ↔ `integrations/para-raid`) | Coupling that defeats the seam. |
 | `try/catch` inside command bodies | Error-router boundary is the only catch site. |
@@ -492,7 +472,7 @@ v1 is "done" when:
 4. `bun test` is green.
 5. The seam for Para-RAID (`integrations/para-raid/orchestrator-stub.ts`) is in place.
 
-After v1: open the v1.5 list — modals for `/journal`, autocomplete for `/search`, context-menu capture, threads-as-conversations. Each goes through brainstorming, design spec, plan — same loop.
+Next surface: the deferred Scrypt capture/query rebuild (§12) once the ingestion rework lands, plus its ergonomics (autocomplete, modals, context-menu capture, threads-as-conversations). Each goes through brainstorming, design spec, plan — same loop.
 
 ---
 
@@ -500,3 +480,4 @@ After v1: open the v1.5 list — modals for `/journal`, autocomplete for `/searc
 
 - 2026-04-26 — Initial draft. Locks v1 conventions: Bun + discord.js@^14.26, slash-first, owner-gated, stateless, two-client-per-module, three error catch-sites, ephemeral-by-default, `#inbox` passive capture, classic embeds primary with Components V2 as upgrade path.
 - 2026-06-05 — Pivot to server-wide, owner-only, @-mention trigger. A mention returns a help overview (auto-deletes ~30s); agentic intent-routing is a later phase. Install profile is now Administrator. Removed the #inbox channel and INBOX_CHANNEL_ID; note capture stays via /capture.
+- 2026-06-25 — Reconcile to current code. Removed the @-mention trigger and the six Scrypt commands (`/capture`, `/journal`, `/brief`, `/search`, `/ask`) and the MCP read client + `SCRYPT_MCP_URL` (commit `e963939` + follow-up); Scrypt capture/query is now **deferred** pending the ingestion rework (the `ScryptError` seam is kept). Intents are now `Guilds` + `GuildMembers` (SERVER MEMBERS INTENT) — MESSAGE CONTENT is off. UI is **Components V2 everywhere** (no longer classic-embeds-primary). Surface is event-driven onboarding + `/ping` + `/create-category|channel|role`. Dropped `USER_TZ`; added `UXIE_ENV`/`ALLOW_SCRYPT_RESTART`/`SCRYPT_RESTART_CMD`. Per-module `README.md`s are the source of truth for specifics.
