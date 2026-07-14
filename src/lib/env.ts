@@ -49,12 +49,36 @@ const schema = z.object({
   // Deployment label shown in the /ping panel's Host row (e.g. "local", "vps", "prod").
   // Free-form so any environment name works; defaults to "local".
   UXIE_ENV: z.string().min(1).default("local"),
+
+  // para-raid v2 module (D4/ratified decision 12) — optional group, all-or-none (enforced
+  // below via superRefine; zod has no built-in all-or-none). Module + message intents are on
+  // iff the group is present (see paraRaidEnabled). PARARAID_WEBHOOK_PORT always has a value
+  // (coerced, defaulted) since it's harmless when the module is off — nothing binds to it.
+  PARARAID_SOCKET: z.string().min(1).optional(),
+  PARARAID_ADAPTER_TOKEN: z.string().min(1).optional(),
+  PARARAID_SIGNING_SECRET: z.string().min(1).optional(),
+  PARARAID_WEBHOOK_PORT: z.coerce.number().int().positive().default(18901),
+});
+
+const PARARAID_GROUP = ["PARARAID_SOCKET", "PARARAID_ADAPTER_TOKEN", "PARARAID_SIGNING_SECRET"] as const;
+
+const withParaRaidGroup = schema.superRefine((val, ctx) => {
+  const missing = PARARAID_GROUP.filter((k) => val[k] === undefined);
+  if (missing.length === 0 || missing.length === PARARAID_GROUP.length) return; // none or all — fine
+  // Partial group: name each missing field individually so the boot error lists exactly what's absent.
+  for (const key of missing) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [key],
+      message: "para-raid env group is all-or-none — set together with the other PARARAID_* vars",
+    });
+  }
 });
 
 export type Env = z.infer<typeof schema>;
 
 export function parseEnv(src: Record<string, string | undefined> = process.env): Env {
-  const result = schema.safeParse(src);
+  const result = withParaRaidGroup.safeParse(src);
   if (!result.success) {
     // Surface the failed field name(s) so the boot log + the operator know exactly what to fix.
     const fields = result.error.issues.map((i) => i.path.join(".")).join(", ");
@@ -66,4 +90,11 @@ export function parseEnv(src: Record<string, string | undefined> = process.env):
     parseRestartCommand(result.data.SCRYPT_RESTART_CMD); // throws ConfigError on invalid
   }
   return result.data;
+}
+
+// A11: derived outside the zod schema (superRefine only validates, it can't add a computed
+// field to the inferred type). The group is enforced all-or-none above, so checking one field
+// is enough. env.ts stays the sole process.env reader — this reads the already-parsed Env.
+export function paraRaidEnabled(env: Env): boolean {
+  return env.PARARAID_SOCKET !== undefined;
 }

@@ -1,0 +1,42 @@
+# Uxie — production VPS compose file.
+# Image is pulled from GHCR (built by .github/workflows/release.yml).
+# Run from /home/ubuntu/uxie/ on the VPS.
+# Secrets sourced from /opt/secrets/uxie.env (chmod 600, owner ubuntu).
+
+services:
+  uxie:
+    image: ghcr.io/psianion/uxie:latest
+    container_name: uxie
+    restart: unless-stopped
+
+    # No inbound port — a Discord gateway bot only makes outbound connections
+    # (Discord gateway + scrypt on loopback). Host networking costs nothing
+    # here and lets uxie reach scrypt at http://127.0.0.1:3777, which is
+    # required since uxie's env validation only allows plaintext http:// to
+    # loopback hosts.
+    network_mode: host
+
+    env_file:
+      - /opt/secrets/uxie.env
+
+    # para-raid v2 module (optional — uncomment to enable /raid, alongside the PARARAID_* block
+    # in /opt/secrets/uxie.env). Host networking shares the network namespace, NOT the
+    # filesystem, so the daemon's unix socket must be bind-mounted explicitly. Mount the DIR
+    # (not the socket file — its inode changes across daemon restarts), same path in-container
+    # as on the host so PARARAID_SOCKET can just repeat it. oven/bun's `bun` user is uid 1000,
+    # same as `ubuntu` on the VPS, so the socket (chmod 0600) stays readable across the mount.
+    # volumes:
+    #   - /home/ubuntu/.para-raid-run:/home/ubuntu/.para-raid-run
+
+    security_opt:
+      - no-new-privileges:true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    labels:
+      sup.plane: "chat"
+      sup.app: "uxie"
