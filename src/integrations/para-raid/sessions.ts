@@ -26,18 +26,19 @@ export class SessionCache {
     }
   }
 
-  async resolveByThread(threadId: string): Promise<Session | undefined> {
-    const hit = this.byThread.get(threadId);
+  private async resolve<K>(map: Map<K, Session>, key: K): Promise<Session | undefined> {
+    const hit = map.get(key);
     if (hit) return hit;
     await this.refresh();
-    return this.byThread.get(threadId);
+    return map.get(key);
   }
 
-  async resolveBySession(sessionId: string): Promise<Session | undefined> {
-    const hit = this.bySession.get(sessionId);
-    if (hit) return hit;
-    await this.refresh();
-    return this.bySession.get(sessionId);
+  resolveByThread(threadId: string): Promise<Session | undefined> {
+    return this.resolve(this.byThread, threadId);
+  }
+
+  resolveBySession(sessionId: string): Promise<Session | undefined> {
+    return this.resolve(this.bySession, sessionId);
   }
 
   // The daemon said this session is gone (e.g. send_turn 404) but a refresh may still list it
