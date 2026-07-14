@@ -23,3 +23,4 @@ export class ScryptError extends UxieError {} // any scrypt-side fault
 export class ScryptTimeoutError extends ScryptError {} // retryable
 export class ScryptAuthError extends ScryptError {} // not retryable
 export class ScryptBadRequestError extends ScryptError {} // not retryable
+export class ParaRaidError extends UxieError {} // any para-raid-side fault

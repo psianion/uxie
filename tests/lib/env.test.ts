@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseEnv } from "../../src/lib/env.ts";
+import { parseEnv, paraRaidEnabled } from "../../src/lib/env.ts";
 
 const complete = {
   DISCORD_BOT_TOKEN: "t",
@@ -81,5 +81,39 @@ describe("parseEnv — Scrypt URL scheme enforcement (UX-SEC-002)", () => {
   test("rejects http:// to a non-loopback host, naming SCRYPT_SERVER_URL", () => {
     expect(() => parseEnv(url("http://10.0.0.5:3000"))).toThrow(/SCRYPT_SERVER_URL/);
     expect(() => parseEnv(url("http://scrypt:3000"))).toThrow(/SCRYPT_SERVER_URL/);
+  });
+});
+
+// D4/A11: PARARAID_SOCKET/PARARAID_ADAPTER_TOKEN/PARARAID_SIGNING_SECRET are all-or-none; the
+// module (and paraRaidEnabled) is off when absent, and boot fails loudly on a partial group.
+describe("parseEnv — para-raid env group (D4)", () => {
+  const paraRaidVars = {
+    PARARAID_SOCKET: "/run/para-raid.sock",
+    PARARAID_ADAPTER_TOKEN: "adapter-token",
+    PARARAID_SIGNING_SECRET: "signing-secret",
+  };
+
+  test("group absent: boots fine, paraRaidEnabled is false", () => {
+    const env = parseEnv(complete);
+    expect(paraRaidEnabled(env)).toBe(false);
+  });
+
+  test("group fully present: boots fine, paraRaidEnabled is true", () => {
+    const env = parseEnv({ ...complete, ...paraRaidVars });
+    expect(paraRaidEnabled(env)).toBe(true);
+    expect(env.PARARAID_SOCKET).toBe("/run/para-raid.sock");
+  });
+
+  test.each(["PARARAID_SOCKET", "PARARAID_ADAPTER_TOKEN", "PARARAID_SIGNING_SECRET"])(
+    "partial group (missing %s) fails boot, naming the missing field",
+    (missing) => {
+      const partial = { ...complete, ...paraRaidVars, [missing]: undefined };
+      expect(() => parseEnv(partial)).toThrow(new RegExp(missing));
+    },
+  );
+
+  test("PARARAID_WEBHOOK_PORT defaults to 18901 and coerces a numeric string", () => {
+    expect(parseEnv(complete).PARARAID_WEBHOOK_PORT).toBe(18901);
+    expect(parseEnv({ ...complete, PARARAID_WEBHOOK_PORT: "9000" }).PARARAID_WEBHOOK_PORT).toBe(9000);
   });
 });
