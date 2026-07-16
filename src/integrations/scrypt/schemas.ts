@@ -46,9 +46,14 @@ export type JournalDayBundle = z.infer<typeof JournalDayBundle>;
 
 export const DailyNote = z.object({
   path: z.string(),
-  title: z.string(),
+  // Server passes frontmatter.title through unchecked (daily-context.ts) — a note with a
+  // non-string YAML title (e.g. `title: 2026`) must degrade, not fail the whole /brief parse.
+  // Mirrors OpenThread.title below.
+  title: z.string().catch("(untitled)"),
   modified: z.string(),
-  tags: z.array(z.string()),
+  // tags are an unchecked frontmatter passthrough and /brief never renders them: a malformed
+  // element must never crash the command. Degrade to [] rather than fail the parse.
+  tags: z.array(z.string()).catch([]),
   snippet: z.string(),
 });
 
