@@ -58,6 +58,13 @@ const schema = z.object({
   PARARAID_ADAPTER_TOKEN: z.string().min(1).optional(),
   PARARAID_SIGNING_SECRET: z.string().min(1).optional(),
   PARARAID_WEBHOOK_PORT: z.coerce.number().int().positive().default(18901),
+  // U6: channel where nightly librarian sessions (adapter_ref "librarian:<utc-date>", opened by
+  // CLI, not /raid) get their digest thread. Deliberately OUTSIDE the all-or-none group and
+  // optional — absent means the librarian handler is off and librarian:* events are dropped.
+  LIBRARIAN_CHANNEL_ID: z
+    .string()
+    .regex(/^\d{17,20}$/, "must be a Discord channel id (snowflake)")
+    .optional(),
 });
 
 const PARARAID_GROUP = ["PARARAID_SOCKET", "PARARAID_ADAPTER_TOKEN", "PARARAID_SIGNING_SECRET"] as const;

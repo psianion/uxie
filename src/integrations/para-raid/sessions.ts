@@ -9,8 +9,13 @@ import type { ParaRaidClient, Session } from "./client.ts";
 const LIVE_STATUSES = new Set<Session["status"]>(["live", "launching", "recovering"]);
 
 export class SessionCache {
-  private byThread = new Map<string, Session>(); // adapter_ref (thread id) -> session
+  private byThread = new Map<string, Session>(); // effective thread id (see threadFor) -> session
   private bySession = new Map<string, Session>(); // session id -> session
+  // U6: explicit thread registrations for sessions whose adapter_ref is NOT a thread id (e.g.
+  // CLI-opened librarian sessions, adapter_ref "librarian:<utc-date>"). Survives refresh —
+  // refresh rebuilds from GET /v1/sessions, which knows nothing about the Discord thread we
+  // created — and ages out with its session below.
+  private threadBySession = new Map<string, string>();
 
   constructor(private client: ParaRaidClient) {}
 
@@ -21,8 +26,27 @@ export class SessionCache {
     this.bySession.clear();
     for (const s of res.body.sessions) {
       if (!LIVE_STATUSES.has(s.status)) continue;
-      this.byThread.set(s.adapter_ref, s);
+      this.byThread.set(this.threadFor(s), s);
       this.bySession.set(s.id, s);
+    }
+    // Registrations for sessions the daemon no longer reports live age out with them.
+    for (const id of this.threadBySession.keys()) {
+      if (!this.bySession.has(id)) this.threadBySession.delete(id);
+    }
+  }
+
+  /** The Discord thread a session's events post to: an explicit registration wins over adapter_ref. */
+  threadFor(session: Session): string {
+    return this.threadBySession.get(session.id) ?? session.adapter_ref;
+  }
+
+  /** U6: map a session to a thread when its adapter_ref is not the thread id (librarian sessions). */
+  registerThread(sessionId: string, threadId: string): void {
+    this.threadBySession.set(sessionId, threadId);
+    const s = this.bySession.get(sessionId);
+    if (s) {
+      this.byThread.delete(s.adapter_ref); // drop the stale non-thread key, if cached
+      this.byThread.set(threadId, s);
     }
   }
 
@@ -45,7 +69,7 @@ export class SessionCache {
   // (status can lag) — evict explicitly so the next resolve misses and re-fetches truth.
   invalidate(sessionId: string): void {
     const s = this.bySession.get(sessionId);
-    if (s) this.byThread.delete(s.adapter_ref);
+    if (s) this.byThread.delete(this.threadFor(s));
     this.bySession.delete(sessionId);
   }
 

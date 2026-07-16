@@ -26,5 +26,11 @@ Turning it on also flips the bot's Discord intents: `GuildMessages` + `MessageCo
 (`bot/client.ts`), and `MessageContent` is privileged — enable it in the Discord dev portal
 (Bot > Privileged Gateway Intents) or login fails with "disallowed intents".
 
+Optionally set `LIBRARIAN_CHANNEL_ID` (a text-channel id, independent of the group) to handle
+the nightly CLI-opened librarian sessions (`adapter_ref` `librarian:<utc-date>`): their events
+get a thread named after the adapter_ref in that channel (reused if one already exists), and
+owner messages in it relay like any `/raid` thread. Absent = librarian events are logged and
+dropped.
+
 For a full local end-to-end walkthrough (para-raid + uxie + a real `/raid` round trip), see
 `docs/e2e-local.md`.

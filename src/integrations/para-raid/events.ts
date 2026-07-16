@@ -3,9 +3,9 @@
 // (esp. the high-volume tool_call) falls through to a log line only — the repo's Logger has no
 // "debug" level (lib/log.ts), so that's the closest equivalent: visible in logs, silent in
 // Discord.
-import { AttachmentBuilder, DiscordAPIError, RESTJSONErrorCodes, type Client } from "discord.js";
+import { AttachmentBuilder, ChannelType, DiscordAPIError, RESTJSONErrorCodes, type Client } from "discord.js";
 import type { AnyThreadChannel } from "discord.js";
-import type { ParaRaidClient } from "./client.ts";
+import type { ParaRaidClient, Session } from "./client.ts";
 import type { SessionCache } from "./sessions.ts";
 import type { ParaRaidEvent } from "./receiver.ts";
 import { log } from "../../lib/log.ts";
@@ -14,6 +14,9 @@ export interface EventDeps {
   client: Client;
   api: ParaRaidClient;
   sessions: SessionCache;
+  // U6: channel for nightly librarian session threads (LIBRARIAN_CHANNEL_ID). Absent = the
+  // librarian feature is off and librarian:* events are logged + dropped.
+  librarianChannelId?: string;
 }
 
 // A7 reuses this exact wording for the relay's 503 mapping — one string, one source of truth.
@@ -127,13 +130,71 @@ async function notifySession(evt: ParaRaidEvent, deps: EventDeps, message: strin
   await postText(deps, threadId, evt.sessionId, message);
 }
 
+const LIBRARIAN_REF = /^librarian:/;
+
 async function threadIdFor(evt: ParaRaidEvent, deps: EventDeps): Promise<string | undefined> {
   if (!evt.sessionId) return undefined;
   const session = await deps.sessions.resolveBySession(evt.sessionId);
   if (!session) {
     log.warn("para-raid event for unknown session", { eventType: evt.eventType, sessionId: evt.sessionId });
+    return undefined;
   }
-  return session?.adapter_ref;
+  const threadId = deps.sessions.threadFor(session);
+  // U6: an unregistered librarian session — its adapter_ref ("librarian:<utc-date>", set by the
+  // nightly CLI open-session) is not a thread id, so resolve-or-create its thread first. Once
+  // registered, threadFor returns a real thread id and this branch never fires again.
+  if (LIBRARIAN_REF.test(threadId)) return resolveLibrarianThread(session, deps);
+  return threadId;
+}
+
+// U6: two events for the same fresh librarian session (session_live + turn_replied arriving
+// before the first has registered its thread) each hit the create path — the active-thread-name
+// search can't dedup a thread neither call has created yet, so both would create one. The
+// receiver runs handlers concurrently (Bun.serve does not serialize), so coalesce per session id:
+// the first creation wins and every concurrent caller awaits it.
+const inflightLibrarianThreads = new Map<string, Promise<string | undefined>>();
+
+function resolveLibrarianThread(session: Session, deps: EventDeps): Promise<string | undefined> {
+  const inflight = inflightLibrarianThreads.get(session.id);
+  if (inflight) return inflight;
+  const p = createLibrarianThread(session, deps).finally(() => inflightLibrarianThreads.delete(session.id));
+  inflightLibrarianThreads.set(session.id, p);
+  return p;
+}
+
+// U6: find-or-create the librarian session's thread in LIBRARIAN_CHANNEL_ID. Searching the
+// channel's ACTIVE threads for one named exactly the adapter_ref first dedups across uxie
+// restarts (the registration cache is in-memory); otherwise a public thread is created. The
+// registration makes every subsequent event — and the relay — flow through the normal paths.
+async function createLibrarianThread(session: Session, deps: EventDeps): Promise<string | undefined> {
+  const channelId = deps.librarianChannelId;
+  if (!channelId) {
+    log.warn("para-raid librarian event dropped — LIBRARIAN_CHANNEL_ID not set", {
+      sessionId: session.id,
+      adapterRef: session.adapter_ref,
+    });
+    return undefined;
+  }
+  try {
+    const channel = await deps.client.channels.fetch(channelId);
+    // ponytail: GuildText only — the librarian channel is a plain text channel; widen if it
+    // ever moves to announcements/forum.
+    if (!channel || channel.type !== ChannelType.GuildText) {
+      await deps.api.closeSession({ session_id: session.id }).catch(() => {});
+      log.warn("para-raid librarian channel unavailable, session closed", { channelId, sessionId: session.id });
+      return undefined;
+    }
+    const active = await channel.threads.fetchActive();
+    const existing = active.threads.find((t) => t.name === session.adapter_ref);
+    const thread = existing ?? (await channel.threads.create({ name: session.adapter_ref }));
+    deps.sessions.registerThread(session.id, thread.id);
+    return thread.id;
+  } catch (err) {
+    // Missing/no-access channel reaps the session and acks (same contract as postToThread, A2);
+    // anything else propagates so the receiver 500s and para-raid redelivers.
+    if (await closeIfPermanent(err, deps, session.id, channelId)) return undefined;
+    throw err;
+  }
 }
 
 async function postText(

@@ -42,6 +42,11 @@ const DEDUP_PRUNE_MS = 20 * 60 * 1000; // retry_window_ms is 10 min (config.exam
 
 export function startReceiver(opts: ReceiverOpts): Receiver {
   const seen = new Map<string, number>(); // eventId -> receivedAt
+  // In-flight coalescing: Bun.serve runs handlers concurrently, and a slow
+  // handler (librarian thread creation) can outlive the daemon's delivery
+  // retry — the retry isn't in `seen` yet, so both would run and double-post.
+  // A concurrent duplicate awaits the FIRST attempt's outcome instead.
+  const inflight = new Map<string, Promise<void>>();
 
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -79,16 +84,29 @@ export function startReceiver(opts: ReceiverOpts): Receiver {
         body: parsed,
       };
 
+      let attempt = eventId ? inflight.get(eventId) : undefined;
+      const isDuplicate = attempt !== undefined;
+      if (!attempt) {
+        attempt = opts.handler(evt);
+        if (eventId) inflight.set(eventId, attempt);
+      }
       try {
-        await opts.handler(evt);
+        await attempt;
       } catch (err) {
-        log.error("para-raid webhook handler failed", { eventType: evt.eventType, eventId, err });
+        if (!isDuplicate) {
+          log.error("para-raid webhook handler failed", { eventType: evt.eventType, eventId, err });
+        }
+        // Failure unmarks in-flight so a LATER redelivery gets a fresh attempt.
+        if (eventId) inflight.delete(eventId);
         return new Response("handler error", { status: 500 });
       }
 
       // A5: mark seen only now, after the handler has already succeeded.
-      if (eventId) seen.set(eventId, Date.now());
-      return new Response("ok");
+      if (eventId) {
+        seen.set(eventId, Date.now());
+        inflight.delete(eventId);
+      }
+      return new Response(isDuplicate ? "ok (duplicate)" : "ok");
     },
   });
 

@@ -159,3 +159,32 @@ describe("formatReply (A1 — empty reply guard)", () => {
     expect(formatReply("hello")).toBe("hello");
   });
 });
+
+test("concurrent duplicate delivery coalesces onto one handler run", async () => {
+  let calls = 0;
+  let release: (v?: unknown) => void = () => {};
+  const gate = new Promise((r) => { release = r; });
+  const receiver = startReceiver({
+    port: 0,
+    secret: SECRET,
+    handler: async () => { calls++; await gate; },
+  });
+  try {
+    const ts = "1700000000";
+    const body = JSON.stringify({ event_type: "session_live", session_id: "s1" });
+    const headers = {
+      "X-Para-Raid-Timestamp": ts,
+      "X-Para-Raid-Signature": sign(ts, body),
+      "X-Para-Raid-Event-Id": "evt-concurrent-1",
+    };
+    const [r1, r2] = [post(receiver.port, body, headers), post(receiver.port, body, headers)];
+    await new Promise((r) => setTimeout(r, 100));
+    release();
+    const [a, b] = await Promise.all([r1, r2]);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(calls).toBe(1);
+  } finally {
+    receiver.stop();
+  }
+});
