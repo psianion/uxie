@@ -1,14 +1,18 @@
-// scrypt module entry. Builds the REST + MCP clients from validated env and the command
-// collection. The module owns its clients and commands; the boot path wires the command
-// collection into the interaction-router. Only /ping is wired today, but the full connection
-// layer (REST write/health + MCP read) is constructed and kept ready for the commands being
-// rebuilt next.
+// scrypt module entry. Builds the client from validated env and the command collection; the
+// boot path wires the command collection into the interaction-router. Commands: /ping (health
+// panel), /capture (MCP create_note → projects/_inbox), /journal (journal append), /search
+// (hybrid search + confidence gate), /brief (daily context). Always on: SCRYPT_SERVER_URL +
+// SCRYPT_AUTH are required env, so there is no feature flag to check.
 import { hostname } from "node:os";
 import { Collection } from "discord.js";
 import { buildCommandCollection, type LoadedCommand } from "../../bot/command-loader.ts";
 import type { ComponentHandler } from "../../bot/interaction-router.ts";
 import { ScryptRestClient } from "./rest-client.ts";
 import { buildPingCommand } from "./commands/ping.ts";
+import { buildCaptureCommand } from "./commands/capture.ts";
+import { buildJournalCommand } from "./commands/journal.ts";
+import { buildSearchCommand } from "./commands/search.ts";
+import { buildBriefCommand } from "./commands/brief.ts";
 import { buildPingComponentHandler } from "./ping/handler.ts";
 import type { Env } from "../../lib/env.ts";
 
@@ -32,7 +36,13 @@ export function buildScryptModule(env: Env): ScryptModule {
     host: `${env.UXIE_ENV} · ${hostname()}`,
   };
 
-  const cmds: LoadedCommand[] = [buildPingCommand(rest, pingOpts)];
+  const cmds: LoadedCommand[] = [
+    buildPingCommand(rest, pingOpts),
+    buildCaptureCommand(rest),
+    buildJournalCommand(rest),
+    buildSearchCommand(rest),
+    buildBriefCommand(rest),
+  ];
 
   // Restart deps are wired ONLY when the capability is enabled; secrets are passed so any
   // restart stderr surfaced to the owner is redacted of them.
