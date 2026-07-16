@@ -36,7 +36,12 @@ export class ParaRaidClient {
     private token: string,
   ) {}
 
-  private async call<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<ApiResult<T>> {
+  private async call<T>(
+    method: "GET" | "POST",
+    path: string,
+    body?: unknown,
+    timeoutMs: number = TIMEOUT_MS,
+  ): Promise<ApiResult<T>> {
     const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` };
     if (method === "POST") {
       headers["Content-Type"] = "application/json";
@@ -48,7 +53,7 @@ export class ParaRaidClient {
       unix: this.socketPath,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const text = await res.text();
     return { status: res.status, body: (text ? JSON.parse(text) : {}) as T };
@@ -75,10 +80,15 @@ export class ParaRaidClient {
   }
 
   resumeSession(req: { session_id: string }) {
+    // resume_session blocks while the daemon runs `claude --resume` (up to 3
+    // attempts with backoff; ~18s observed on a cold machine). The default 5s
+    // timeout made uxie hang up early, retry, and race a second resume that
+    // killed the session. 120s comfortably covers the daemon's worst case.
     return this.call<{ session_id: string; status: string; error?: string }>(
       "POST",
       "/v1/resume_session",
       req,
+      120_000,
     );
   }
 
