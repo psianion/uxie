@@ -147,11 +147,26 @@ async function threadIdFor(evt: ParaRaidEvent, deps: EventDeps): Promise<string 
   return threadId;
 }
 
+// U6: two events for the same fresh librarian session (session_live + turn_replied arriving
+// before the first has registered its thread) each hit the create path — the active-thread-name
+// search can't dedup a thread neither call has created yet, so both would create one. The
+// receiver runs handlers concurrently (Bun.serve does not serialize), so coalesce per session id:
+// the first creation wins and every concurrent caller awaits it.
+const inflightLibrarianThreads = new Map<string, Promise<string | undefined>>();
+
+function resolveLibrarianThread(session: Session, deps: EventDeps): Promise<string | undefined> {
+  const inflight = inflightLibrarianThreads.get(session.id);
+  if (inflight) return inflight;
+  const p = createLibrarianThread(session, deps).finally(() => inflightLibrarianThreads.delete(session.id));
+  inflightLibrarianThreads.set(session.id, p);
+  return p;
+}
+
 // U6: find-or-create the librarian session's thread in LIBRARIAN_CHANNEL_ID. Searching the
 // channel's ACTIVE threads for one named exactly the adapter_ref first dedups across uxie
 // restarts (the registration cache is in-memory); otherwise a public thread is created. The
 // registration makes every subsequent event — and the relay — flow through the normal paths.
-async function resolveLibrarianThread(session: Session, deps: EventDeps): Promise<string | undefined> {
+async function createLibrarianThread(session: Session, deps: EventDeps): Promise<string | undefined> {
   const channelId = deps.librarianChannelId;
   if (!channelId) {
     log.warn("para-raid librarian event dropped — LIBRARIAN_CHANNEL_ID not set", {

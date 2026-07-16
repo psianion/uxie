@@ -361,6 +361,16 @@ describe("librarian sessions (U6 — adapter_ref is not a thread id)", () => {
     expect(r.create).toHaveBeenCalledTimes(1);
   });
 
+  test("concurrent events for the same fresh session create ONE thread (race coalesced)", async () => {
+    const r = libRig();
+    // session_live + turn_replied arrive before either has registered a thread.
+    await Promise.all([
+      r.handle(evt("session_live", {}, LIB_SESSION_ID)),
+      r.handle(evt("turn_replied", { reply: "digest" }, LIB_SESSION_ID)),
+    ]);
+    expect(r.create).toHaveBeenCalledTimes(1);
+  });
+
   test("dedups via an existing active thread with the exact adapter_ref name (in-memory cache lost on restart)", async () => {
     const existing = fakeThread({ id: "888888888888888888", name: LIB_REF });
     const r = libRig({ activeThreads: [existing, fakeThread({ id: "777", name: "other" })] });
