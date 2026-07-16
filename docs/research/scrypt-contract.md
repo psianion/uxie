@@ -1,8 +1,8 @@
 # Scrypt Contract (authoritative)
 
 > Single source of truth for uxie's writes (Scrypt REST) and reads (Scrypt MCP).
-> Synthesized from REST source-file inspection (`/Users/admin/Desktop/Files/scrypt/src/server/...`)
-> and MCP wire-protocol inspection (`/Users/admin/Desktop/Files/scrypt/src/server/mcp/...`).
+> **Reflects scrypt as of `feat/journal-rework-v2` (2026-07-16), pending merge.**
+> Synthesized from source inspection of the scrypt worktree (`src/server/...`).
 > The build consumes this doc verbatim. Every response is zod-parsed, never cast.
 >
 > Conventions that apply everywhere:
@@ -13,83 +13,141 @@
 
 ---
 
+## 0. Auth model (all REST + MCP + /ws)
+
+Source: `src/server/auth.ts`.
+
+- The gate covers `/api/*`, `/ws`, and `/mcp` (same loopback-or-token rule). The static SPA shell is public.
+- **Loopback trust is by the real TCP socket peer address** (`server.requestIP()`): `127.0.0.1`, `::1`, `::ffff:127.0.0.1`, `127.*`. A `Host: localhost` header does NOT bypass auth anymore — this applies in production too. No peer info → fail closed.
+- Everything non-loopback needs `Authorization: Bearer <SCRYPT_AUTH_TOKEN>`.
+- If the server has **no token configured**, every remote request gets `401` (reason `no_token_configured` internally; the wire response is identical).
+- `401` responses are **empty-body, no `WWW-Authenticate` header**. A misconfigured scrypt (no token) is indistinguishable from a bad uxie token at the 401 level — uxie surfaces 401 distinctly in error replies and requires `SCRYPT_AUTH` at boot.
+- uxie always sends the token regardless of where it runs.
+
+---
+
 ## 1. REST endpoints (writes + read-only vault fetches)
 
-Auth model for ALL REST endpoints: `Authorization: Bearer <SCRYPT_AUTH>`. Localhost callers
-(`127.0.0.1`, `::1`, or `localhost` Host header) bypass auth entirely even in production;
-remote callers MUST send the token. If no token is configured server-side, remote requests get `401`.
-uxie always sends the token regardless.
-
-### 1.1 POST /api/ingest — the only write path
+### 1.1 POST /api/ingest — kind-routed write path
 
 - **Method / path**: `POST /api/ingest`
-- **Auth**: Bearer (as above)
 - **Request body** (`IngestRequest`):
-  - `kind: Kind` — one of `thread | research_run | memory | spec | plan | note | log | thought | idea | journal`
-  - `title: string` (min 1) — *ignored for `journal`*
+  - `kind: Kind` — one of `thread | research_run | memory | spec | plan | note | log | thought | idea`. **`journal` is GONE** — journal writes go through `/api/journal/*` (§1.2).
+  - `title: string` (min 1)
   - `content: string` (min 1)
-  - `frontmatter?: Record<string, unknown>` — *ignored for `journal`*
-  - `replace?: boolean` — overwrite a conflicting file; *ignored for `journal`*
+  - `frontmatter?: Record<string, unknown>` — server strips `created`/`modified`/`source` and stamps `title`, `kind`, `source: "claude"`.
+  - `replace?: boolean` — overwrite a conflicting file (default false).
+- **Destination routing** (`src/server/ingest/kinds.ts` `destinationFor`; dates UTC):
+  - `frontmatter.domain` (+ optional `subdomain`), lowercase slugs `/^[a-z0-9][a-z0-9-]*$/`, override the path: `<domain>/<subdomain>/<slug>.md`. Not applied to `research_run`.
+  - Else by kind: `thread → notes/threads/<slug>.md` · `research_run → notes/research/<YYYY-MM-DD-HHMM>-<slug>.md` · `memory → memory/<slug>.md` · `spec → docs/specs/<YYYY-MM-DD>-<slug>.md` · `plan → docs/plans/<YYYY-MM-DD>-<slug>.md` · `note → notes/inbox/<slug>.md` · `log → notes/logs/<YYYY-MM-DD>-<slug>.md` · `thought → notes/thoughts/<YYYY-MM-DD-HHMM>-<slug>.md` · `idea → notes/ideas/<slug>.md`.
 - **Per-kind rules**:
-  - `journal`: appends an entry (`hh:mm` UTC heading + content) to `journal/YYYY-MM-DD.md`. Creates the file on first write of the day. Uses `content` ONLY — `title`, `frontmatter`, `replace` are ignored. Timestamp is **UTC server time**; there is **no `tz` field** (see BLOCKERS).
-  - `research_run`: `frontmatter.thread` (string, required) must be an existing thread slug (validated against `notes/threads/{slug}.md`). Missing thread → `404` with `field: "frontmatter.thread"`.
-  - all non-journal kinds: optional `frontmatter.domain` and `frontmatter.subdomain` are lowercase slugs matching `/^[a-z0-9][a-z0-9-]*$/`; when present they override the computed file path. Invalid slug → `400`.
+  - `research_run`: `frontmatter.thread` (string, required) must be an existing thread slug (validated against `notes/threads/{slug}.md` BEFORE any write). Missing/unknown thread → **`400`** with `field: "frontmatter.thread"` (was 404 in the old contract — it is `bad_request` now).
+- **Idempotency**: this route has NO `client_tag` dedup. A retry that hits an existing path returns `409` unless `replace: true`. Treat `409` on retry as success-already-happened only if uxie wrote that exact path this interaction.
 - **Success (201)** (`IngestResult`): `{ path, kind, created, side_effects? }` where `side_effects?` = `{ thread_updated?: string, research_run_id?: number }`.
-- **Errors**: `400` bad_request · `409` conflict (file exists, `replace` not set) · `404` not_found (thread missing) · `500` internal. Error body (`IngestError`): `{ error: string, field?: string }`.
-- **Source**: `src/server/api/ingest.ts`, `src/server/ingest/router.ts`
+- **Errors**: `400` bad_request (incl. unknown thread) · `409` conflict · `500` internal. Error body: `{ error: string, field?: string }`.
+- **Captures / inbox convention**: the canonical vault layout is `projects/<project>/<doc_type>/<slug>.md`, with **`projects/_inbox/` as the reserved project for unintegrated captures**. That layout is written via the MCP `create_note` tool (`{ path, content, client_tag }` — idempotent by `client_tag`, replays within 24 h return the cached response), e.g. `projects/_inbox/other/<slug>.md`. Use MCP `create_note` for captures uxie wants filed into the projects layout; use `POST /api/ingest` for the legacy kind folders.
+- **Source**: `src/server/api/ingest.ts`, `src/server/ingest/router.ts`, `src/server/ingest/kinds.ts`, `src/server/vocab/reserved-projects.ts`
 
-### 1.2 GET /api/daily_context — drives /brief
+### 1.2 /api/journal/* — replaces kind:journal (drives journal append + /brief detail)
 
-- **Method / path**: `GET /api/daily_context`
-- **Auth**: Bearer · **Request**: no body, no query params. Always returns context for **UTC today**.
-- **Response** (`DailyContextResponse`): `{ generated_at, today: { date, journal }, recent_notes[], open_threads[], active_memories[], tag_cloud[], related }`.
-  - `recent_notes`: non-journal notes modified in last 24h, sorted by `modified` desc, max 20; each has a `snippet` capped at 200 chars.
-  - `open_threads`: status in `open|in-progress|blocked`, sorted by `priority` desc.
-  - `active_memories`: notes under `memory/` with `active !== false`, sorted by `priority` desc.
+One file per **UTC day** at `journal/<YYYY-MM-DD>.md`; each entry is a `## <UTC ISO timestamp>` heading + markdown body. The entry **id IS its exact UTC ISO timestamp** (e.g. `2026-07-16T09:30:00.000Z`), stamped server-side at write time. `:date` must be strict `YYYY-MM-DD` or the route returns `400 { "error": "invalid date" }`.
+
+Every route returns the same **day bundle** (`JournalDayBundle`):
+
+```json
+{
+  "date": "2026-07-16",
+  "entries": [ { "id": "2026-07-16T09:30:00.000Z", "displayTime": "9:30 AM", "body": "..." } ],
+  "tasks_due": [ /* Task rows due this date, ANY status */ ],
+  "related": [ { "path": "projects/scrypt/plan/x.md", "title": "x", "score": 0.62 } ]
+}
+```
+
+- A day with no file returns an **empty bundle, not 404**.
+- `related` is embedding-based (nearest non-journal notes, max 5); `[]` when the embedder is down.
+
+| Method | Path | Body | Notes |
+|---|---|---|---|
+| GET | `/api/journal/today` | — | Bundle for UTC today |
+| GET | `/api/journal/:date` | — | Bundle for that day |
+| GET | `/api/journal/:date/tasks` | — | `Task[]` due that day, any status |
+| GET | `/api/journal/calendar?from=&to=` | — | `[{ date, count }]` — days with journal files, inclusive range filter |
+| POST | `/api/journal/:date/entries` | `{ "body": string }` | Append; server stamps UTC ISO id; returns bundle |
+| PATCH | `/api/journal/:date/entries/:id` | `{ "body": string }` | Replace entry body; unknown `:id` is a no-op; returns bundle |
+| DELETE | `/api/journal/:date/entries/:id` | — | Remove entry; returns bundle |
+
+POST/PATCH with empty `body` → `400 { "error": "body required" }`.
+
+**uxie journal append recipe**: `POST /api/journal/<utc-today>/entries` with `{ body }`. The stored timestamp is the server's UTC instant — render it in `USER_TZ` client-side from the returned entry `id`.
+
+- **Source**: `src/server/api/journal.ts`, `src/server/journal/doc.ts`, `src/server/journal/related.ts`
+
+### 1.3 GET /api/daily-context — drives /brief
+
+- **Canonical path**: `GET /api/daily-context` (hyphen). **`GET /api/daily_context` (underscore) is a permanent alias** — same handler; uxie's deployed health probe keeps working. New code should use the hyphen.
+- No body, no query params. Always UTC today.
+- **Response** (`DailyContextResponse`): `{ generated_at, today: { date, journal }, recent_notes[], open_threads[], active_memories[], tag_cloud[] }`.
+  - `recent_notes`: non-journal notes modified in last 24 h, sorted `modified` desc, max 20; `snippet` capped at 200 chars.
+  - `open_threads`: status in `open|in-progress|blocked`, sorted priority desc then oldest `last_run`.
+  - `active_memories`: `memory/` notes with `active !== false`, sorted priority desc.
   - `tag_cloud`: max 20.
-  - `related`: `{ notes (max 5, last 7d, domain/tag match), memories (max 3, tag overlap), draft_prompts (max 3) }`.
+  - **The `related` bundle is REMOVED** from this response (it moved to the journal day bundle, §1.2). Drop `RelatedBundle` from the zod schema.
 - **Source**: `src/server/api/daily-context.ts`
 
-### 1.3 GET /api/search — drives /search (REST fallback / link building)
+### 1.4 GET /api/search/hybrid — the cheap-search surface for /search
 
-- **Method / path**: `GET /api/search?q=<query>`
-- **Auth**: Bearer · **Request**: query param `q` (string, optional → returns `[]` if empty).
-- **Response**: `SearchResult[]` = `{ path, title, snippet, tags? }[]`. FTS5-backed.
-- **Source**: `src/server/api/search.ts`
+- **Method / path**: `GET /api/search/hybrid?q=<query>&limit=<n>`
+- `q` required (empty → `{ query, hits: [] }`); `limit` default 8, clamped 1–25.
+- BM25 (FTS5) + embedding cosine fused via Reciprocal Rank Fusion (k=60); degrades to FTS-only when the embedder is unavailable.
+- **Response** (`HybridSearchResponse`):
 
-### 1.4 GET /api/notes — note listing (link building / web-UI)
+```json
+{
+  "query": "vault sync",
+  "hits": [
+    {
+      "path": "projects/scrypt/spec/vault-sync-design.md",
+      "title": "Vault Sync Design",
+      "project": "scrypt",
+      "doc_type": "spec",
+      "description": "one-liner or null",
+      "excerpt": "first ~200 chars of indexed body",
+      "score": 0.0325,
+      "fts_rank": 1,
+      "sem_rank": 2
+    }
+  ]
+}
+```
 
-- **Method / path**: `GET /api/notes?tag=<tag>&folder=<folder>&sort=<sort>`
-- **Auth**: Bearer · **Request**: query params `tag?`, `folder?`, `sort?` (only `'modified'`).
-- **Response**: `NoteMetadata[]` = `{ path, title, modified?, size }[]`.
-- **Source**: `src/server/api/notes.ts`
+- **`score` semantics (use for confidence gating)**: RRF sum where each ranker contributes `1/(60 + rank)`. Ceiling ≈ `2/61 ≈ 0.0328` (rank 1 in both); a single-ranker hit tops out at `1/61 ≈ 0.0164`. Gate: `score > 0.0164` ⇒ both rankers surfaced the note (high confidence); equivalently check `fts_rank !== null && sem_rank !== null`. `fts_rank`/`sem_rank` are 1-based, `null` when that ranker missed.
+- `excerpt` is a body prefix, NOT a match-window snippet — don't bold-match against it.
+- The old `GET /api/search?q=` (plain FTS5 `SearchResult[]`) still exists as a fallback.
+- **Source**: `src/server/api/search.ts`, `src/server/graph/hybrid-search.ts`
 
-### 1.5 GET /api/notes/:path — single note read
+### 1.5 GET /api/schema — vault conventions doc
 
-- **Method / path**: `GET /api/notes/*path` (path param is a vault-relative path)
-- **Auth**: Bearer · **Request**: path param `path`; no body. `404` if not found.
-- **Response** (`NoteDetail`): `{ path, title, content, frontmatter, backlinks[], incoming_edges[] }` where each edge = `{ source, target, tier: number, reason? }`.
-- **Source**: `src/server/api/notes.ts`
+- Returns the vault-root `SCHEMA.md` (layout, doc_types, edge vocabulary, workflows) as raw markdown, `content-type: text/markdown; charset=utf-8`. `404 { "error": "SCHEMA.md not found at vault root" }` if absent.
+- The same document is served as the MCP `instructions` field on `initialize` — uxie can fetch it once at boot to ground vault-touching prompts.
+- **Source**: `src/server/schema-doc.ts`
 
-### 1.6 Verbatim zod (REST) — copy into `src/scrypt/schemas.ts`
+### 1.6 GET /api/notes and GET /api/notes/*path — unchanged surfaces
+
+- `GET /api/notes?tag=&folder=&sort=` → `NoteMetadata[]`.
+- `GET /api/notes/*path` → `NoteDetail` incl. `backlinks[]` and `incoming_edges[]`. **Edge `tier` is now a STRING enum** `"connected" | "mentions" | "semantically_related"` (same as MCP) — the old REST-number/MCP-string mismatch is gone; one edge schema can be shared.
+- **Source**: `src/server/api/notes.ts`, `src/shared/types.ts` (`parseTier`, `NoteIncomingEdge`)
+
+### 1.7 Verbatim zod (REST) — copy into `src/scrypt/schemas.ts`
 
 ```ts
 import { z } from 'zod';
 
-// === INGEST REQUEST & RESPONSE ===
+// === INGEST ===
 
 export const Kind = z.enum([
-  'thread',
-  'research_run',
-  'memory',
-  'spec',
-  'plan',
-  'note',
-  'log',
-  'thought',
-  'idea',
-  'journal',
-]);
+  'thread', 'research_run', 'memory', 'spec', 'plan',
+  'note', 'log', 'thought', 'idea',
+]); // NO 'journal' — journal writes use /api/journal/*
 
 export type Kind = z.infer<typeof Kind>;
 
@@ -101,8 +159,6 @@ export const IngestRequest = z.object({
   replace: z.boolean().optional(),
 });
 
-export type IngestRequest = z.infer<typeof IngestRequest>;
-
 export const IngestResult = z.object({
   path: z.string(),
   kind: Kind,
@@ -113,13 +169,51 @@ export const IngestResult = z.object({
   }).optional(),
 });
 
-export type IngestResult = z.infer<typeof IngestResult>;
+export const IngestError = z.object({
+  error: z.string(),
+  field: z.string().optional(),
+});
 
-// Note: Journal ingest does NOT accept a tz field. The server uses UTC server time.
-// For research_run, frontmatter.thread must be a valid thread slug.
-// For domain/subdomain paths, validate with regex: /^[a-z0-9][a-z0-9-]*$/
+// === JOURNAL ===
 
-// === DAILY_CONTEXT RESPONSE ===
+export const JournalEntryItem = z.object({
+  id: z.string(),           // exact UTC ISO timestamp; also the ## heading
+  displayTime: z.string(),  // 12h render of id, e.g. "3:00 PM"
+  body: z.string(),
+});
+
+export const JournalTask = z.object({
+  id: z.number(),
+  note_path: z.string().nullable(),
+  title: z.string(),
+  type: z.string(),
+  status: z.string(),
+  due_date: z.string().nullable(),
+  priority: z.number(),
+  metadata: z.record(z.unknown()).nullable(),
+  client_tag: z.string().nullable(),
+  created_at: z.number(),
+  updated_at: z.number(),
+});
+
+export const JournalRelated = z.object({
+  path: z.string(),
+  title: z.string(),
+  score: z.number(),
+});
+
+export const JournalDayBundle = z.object({
+  date: z.string(), // 'YYYY-MM-DD'
+  entries: z.array(JournalEntryItem),
+  tasks_due: z.array(JournalTask),
+  related: z.array(JournalRelated),
+});
+
+export const JournalCalendar = z.array(
+  z.object({ date: z.string(), count: z.number() })
+);
+
+// === DAILY-CONTEXT ===
 
 export const DailyNote = z.object({
   path: z.string(),
@@ -147,35 +241,9 @@ export const ActiveMemory = z.object({
   content: z.string(),
 });
 
-export const Tag = z.object({
-  tag: z.string(),
-  count: z.number(),
-});
+export const Tag = z.object({ tag: z.string(), count: z.number() });
 
-export const RelatedNote = z.object({
-  path: z.string(),
-  title: z.string(),
-  modified: z.string().datetime(),
-});
-
-export const RelatedMemory = z.object({
-  path: z.string(),
-  title: z.string(),
-});
-
-export const DraftPrompt = z.object({
-  path: z.string(),
-  title: z.string(),
-  created: z.string().datetime().nullable(),
-});
-
-export const RelatedBundle = z.object({
-  notes: z.array(RelatedNote),
-  memories: z.array(RelatedMemory),
-  draft_prompts: z.array(DraftPrompt),
-});
-
-export const JournalEntry = z.object({
+export const TodayJournal = z.object({
   path: z.string(),
   content: z.string(),
   exists: z.boolean(),
@@ -185,108 +253,58 @@ export const DailyContextResponse = z.object({
   generated_at: z.string().datetime(),
   today: z.object({
     date: z.string(), // 'YYYY-MM-DD'
-    journal: JournalEntry,
+    journal: TodayJournal,
   }),
   recent_notes: z.array(DailyNote),
   open_threads: z.array(OpenThread),
   active_memories: z.array(ActiveMemory),
   tag_cloud: z.array(Tag),
-  related: RelatedBundle,
+  // NOTE: no `related` field anymore — moved to JournalDayBundle.related
 });
 
-export type DailyContextResponse = z.infer<typeof DailyContextResponse>;
+// === HYBRID SEARCH ===
 
-// === SEARCH RESPONSE ===
-
-export const SearchResult = z.object({
+export const HybridHit = z.object({
   path: z.string(),
   title: z.string(),
-  snippet: z.string(),
-  tags: z.array(z.string()).optional(),
+  project: z.string().nullable(),
+  doc_type: z.string().nullable(),
+  description: z.string().nullable(),
+  excerpt: z.string(),
+  score: z.number(),          // RRF; > 1/61 ≈ 0.0164 ⇒ both rankers agree
+  fts_rank: z.number().nullable(),
+  sem_rank: z.number().nullable(),
 });
 
-export type SearchResult = z.infer<typeof SearchResult>;
-
-// === NOTES LIST RESPONSE ===
-
-export const NoteMetadata = z.object({
-  path: z.string(),
-  title: z.string(),
-  modified: z.string().datetime().optional(),
-  size: z.number(),
+export const HybridSearchResponse = z.object({
+  query: z.string(),
+  hits: z.array(HybridHit),
 });
 
-export type NoteMetadata = z.infer<typeof NoteMetadata>;
+// === EDGES (shared REST + MCP — tier is a string on both now) ===
 
-// === NOTES GET RESPONSE ===
+export const Tier = z.enum(['connected', 'mentions', 'semantically_related']);
 
-export const IncomingEdge = z.object({
+export const Edge = z.object({
   source: z.string(),
   target: z.string(),
-  tier: z.number(),
-  reason: z.string().optional(),
+  tier: Tier,
+  reason: z.string().nullable(),
 });
-
-export const NoteDetail = z.object({
-  path: z.string(),
-  title: z.string(),
-  content: z.string(),
-  frontmatter: z.record(z.unknown()),
-  backlinks: z.array(z.string()),
-  incoming_edges: z.array(IncomingEdge),
-});
-
-export type NoteDetail = z.infer<typeof NoteDetail>;
-
-// === ERROR RESPONSES ===
-
-export const IngestError = z.object({
-  error: z.string(),
-  field: z.string().optional(),
-});
-
-export type IngestError = z.infer<typeof IngestError>;
 ```
-
-> NOTE: REST `incoming_edges[].tier` is a **number** (`z.number()`). MCP edges use a **string** tier
-> (`z.string()`). They are different shapes — do not share one schema between REST and MCP.
 
 ---
 
-## 2. MCP wire protocol (reads)
+## 2. MCP wire protocol (reads) — UNCHANGED
 
-- **Transport**: `POST ${SCRYPT_MCP_URL}` (e.g. `.../mcp`), JSON-RPC 2.0 over HTTP. Bearer-token authenticated. Request-scoped and **stateless** — the server tracks no session.
-- **COLD `tools/call` VERDICT: WORKS.** No `initialize` handshake and no session header are required. A bare `tools/call` is accepted directly. `initialize` is *optional* (only for strict MCP-spec compliance) and uxie SKIPS it to stay one round-trip per call.
-- **Required headers** (exactly two):
-  - `Authorization: Bearer ${SCRYPT_AUTH}`
-  - `Content-Type: application/json`
-  - No `Accept` header needed — the server always returns `application/json`, never SSE.
-  - uxie additionally sends `X-Correlation-Id: <client_tag>` for tracing (server ignores it; harmless).
-- **Hand-rolled per-call recipe** (one POST per read, no handshake):
-  1. `POST ${SCRYPT_MCP_URL}` with the two required headers + `AbortSignal.timeout(10000)`.
-  2. Body:
-     ```json
-     {
-       "jsonrpc": "2.0",
-       "id": 1,
-       "method": "tools/call",
-       "params": {
-         "name": "search_notes | semantic_search | get_note",
-         "arguments": { /* tool-specific input object */ }
-       }
-     }
-     ```
-  3. Response envelope: `{ jsonrpc: "2.0", id, result?, error? }`.
-     - On `error` present → throw / log a Scrypt error; `error = { code: number, message: string }`.
-  4. **DOUBLE-PARSE**: the tool payload is at `result.content[0].text`, which is a **stringified JSON**. `JSON.parse` it once to get the actual tool-result object, THEN zod-parse that object with the matching schema below.
-- **Source**: `src/server/mcp/tools/*.ts`
+The read recipe is unchanged from the previous contract version:
 
-### 2.1 Response-envelope parsing helper (shape to build)
+- **Transport**: `POST ${SCRYPT_MCP_URL}`, JSON-RPC 2.0 over HTTP. Bearer-token authenticated (loopback-or-token rule, §0). Stateless.
+- **COLD `tools/call` WORKS** — no `initialize` handshake or session header required. (`initialize` now returns the vault `SCHEMA.md` in `instructions` if you do call it.)
+- **Required headers**: `Authorization: Bearer ${SCRYPT_AUTH}` + `Content-Type: application/json`. No `Accept` needed; responses are always `application/json`, never SSE.
+- **DOUBLE-PARSE**: the tool payload is at `result.content[0].text` (stringified JSON) — `JSON.parse` it, then zod-parse.
 
 ```ts
-import { z } from 'zod';
-
-// JSON-RPC envelope (parse first; never cast)
 const McpEnvelope = z.object({
   jsonrpc: z.literal('2.0'),
   id: z.union([z.number(), z.string(), z.null()]),
@@ -295,127 +313,74 @@ const McpEnvelope = z.object({
   }).optional(),
   error: z.object({ code: z.number(), message: z.string() }).optional(),
 });
-
-// Step 1: McpEnvelope.parse(await res.json())
-// Step 2: if (env.error) -> throw scrypt error
-// Step 3: const inner = JSON.parse(env.result.content[0].text)
-// Step 4: <ToolResult>.parse(inner)
 ```
 
-### 2.2 The three read tools
+### 2.1 The three read tools (inputs unchanged)
 
-#### search_notes
-- **Input**: `{ query: string; limit?: number; tag?: string; folder?: string; project?: string; doc_type?: string; thread?: string }`
-- **Source**: `src/server/mcp/tools/search-notes.ts`
+- `search_notes` — `{ query; limit?; tag?; folder?; project?; doc_type?; thread? }`
+- `semantic_search` — `{ query; limit?; folder?; min_score?; project?; doc_type?; thread? }`. Journal files carry `doc_type: "journal"`, so `doc_type` can include/exclude journal hits.
+- `get_note` — `{ path: string }`
 
-#### semantic_search
-- **Input**: `{ query: string; limit?: number; folder?: string; min_score?: number; project?: string; doc_type?: string; thread?: string }`
-- **Source**: `src/server/mcp/tools/semantic-search.ts`
+### 2.2 get_note result — `sections`/`metadata` shapes now pinned
 
-#### get_note
-- **Input**: `{ path: string }`
-- **Source**: `src/server/mcp/tools/get-note.ts`
-
-### 2.3 Verbatim zod (MCP read-tool results)
+The formerly-opaque shapes are enumerable from `src/server/indexer/sections-repo.ts` and `metadata-repo.ts`:
 
 ```ts
-import { z } from 'zod';
-
-// search_notes result
-export const SearchNotesResult = z.object({
-  results: z.array(
-    z.object({
-      path: z.string(),
-      title: z.string(),
-      snippet: z.string(),
-      score: z.number(),
-      project: z.string().nullable(),
-      doc_type: z.string().nullable(),
-      thread: z.string().nullable(),
-    })
-  ),
+export const NoteSection = z.object({
+  id: z.string(),
+  note_path: z.string(),
+  heading_slug: z.string(),
+  heading_text: z.string(),
+  level: z.number(),
+  summary: z.string().nullable(),
+  start_line: z.number(),
+  end_line: z.number(),
 });
 
-// semantic_search result
-export const SemanticSearchResult = z.object({
-  results: z.array(
-    z.object({
-      path: z.string(),
-      title: z.string(),
-      score: z.number(),
-      snippet: z.string(),
-      chunk_id: z.string(),
-      chunk_range: z.tuple([z.number(), z.number()]),
-      project: z.string().nullable(),
-      doc_type: z.string().nullable(),
-      thread: z.string().nullable(),
-    })
-  ),
-  model: z.string(),
-});
+export const NoteMetadataBlock = z.object({
+  note_path: z.string(),
+  description: z.string().nullable(),
+  entities: z.array(z.string()).nullable(),
+  themes: z.array(z.string()).nullable(),
+  doc_type: z.string().nullable(),
+  summary: z.string().nullable(),
+  updated_at: z.number(),
+}).nullable(); // null when the note has no metadata row
 
-// get_note result (sections & metadata are complex nested server types; keep loose)
 export const GetNoteResult = z.object({
   path: z.string(),
   frontmatter: z.record(z.unknown()),
   body: z.string(),
-  sections: z.array(z.unknown()),        // from SectionsRepo.listByNote()
-  metadata: z.record(z.unknown()),       // ReturnType from MetadataRepo.get()
-  outgoing_edges: z.array(
-    z.object({
-      source: z.string(),
-      target: z.string(),
-      tier: z.string(),                  // MCP tier is a STRING (REST tier is a number)
-      reason: z.string().nullable(),
-    })
-  ),
-  incoming_edges: z.array(
-    z.object({
-      source: z.string(),
-      target: z.string(),
-      tier: z.string(),
-      reason: z.string().nullable(),
-    })
-  ),
+  sections: z.array(NoteSection),
+  metadata: NoteMetadataBlock,
+  outgoing_edges: z.array(Edge), // Edge from §1.7 — tier is a string
+  incoming_edges: z.array(Edge),
 });
 ```
 
-> The MCP-findings sketch had two typos that are CORRECTED above: `target: string()` (missing `z.`)
-> in `incoming_edges`, and the loosened `sections`/`metadata` use `z.array(z.unknown())` /
-> `z.record(z.unknown())` instead of `z.any()` so the parse still fails closed on a non-array/non-object.
+### 2.3 MCP write path for captures
+
+`create_note` (`{ path, content, client_tag }`) is the idempotent write tool: replays of the same `(tool, client_tag)` within 24 h return the cached response. It enforces `projects/<project>/<doc_type>/<slug>.md`; `projects/_inbox/<doc_type>/<slug>.md` is the capture convention (`_inbox` is a reserved project). Frontmatter `project`/`doc_type` must match the path.
 
 ---
 
-## 3. Note permalink scheme (web-UI links)
+## 3. Note permalink scheme (web-UI links) — CONFIRMED
 
-- A note's identity everywhere is its **vault-relative path** (e.g. `notes/inbox/my-note.md`,
-  `journal/2026-06-03.md`). Both REST and MCP return this in a `path` field.
-- Web-UI permalink construction is **NOT confirmed** by source inspection. The presumed scheme is:
-  `${SCRYPT_SERVER_URL}/${path_without_.md}` (strip the trailing `.md`, join to base).
-  This is uxie's best guess for `lib/embed.ts` permalinks and MUST be treated as a BLOCKER until
-  confirmed against Scrypt's actual web router. Embeds should degrade gracefully (link or plain path).
+The SPA router (`src/client/App.tsx`) mounts the editor at `/note/*` and internal navigation uses `navigate(\`/note/${path}\`)` with the full vault-relative path **including `.md`**:
+
+```
+${SCRYPT_SERVER_URL}/note/<vault-relative-path>
+e.g. ${SCRYPT_SERVER_URL}/note/projects/scrypt/spec/vault-sync-design.md
+```
+
+The journal view is `${SCRYPT_SERVER_URL}/journal` (day selection is in-app, not a URL param). Embeds may link `/note/journal/<YYYY-MM-DD>.md` for a specific day file.
 
 ---
 
-## 4. BLOCKERS
+## 4. BLOCKERS — resolutions (verified against feat/journal-rework-v2 code)
 
-1. **Journal tz unsupported (CONFIRMED).** `/api/ingest` for `kind: journal` ignores any tz hint and
-   stamps entries with **UTC server time** (`hh:mm` UTC heading). There is no `tz` field on the
-   request. uxie's `USER_TZ` / `lib/tz.ts` cannot influence the stored journal timestamp — it can only
-   shape uxie's own reply text and `/brief` title. Decision needed: accept UTC-stamped journal entries,
-   or prepend a local-time line into `content` before ingest. Recommend prepending local time into
-   `content` so the vault entry carries the user's intended time.
-2. **Permalink scheme unknown (CONFIRMED unknown).** The vault path is authoritative, but the web-UI
-   URL mapping (`${BASE}/${path_without_.md}` vs some other route) is unverified. Confirm against
-   Scrypt's web router before relying on clickable permalinks in embeds.
-3. **`get_note` `sections` / `metadata` shapes are opaque.** They derive from `SectionsRepo.listByNote()`
-   and `MetadataRepo.get()` and were not fully enumerated. Schemas are intentionally loose
-   (`z.array(z.unknown())` / `z.record(z.unknown())`). If a future feature needs fields inside them,
-   the exact server shapes must be captured first.
-4. **REST vs MCP edge `tier` type mismatch.** REST `incoming_edges[].tier` is a **number**; MCP
-   `incoming_edges[]/outgoing_edges[].tier` is a **string**. Not a blocker for building, but do NOT
-   reuse one edge schema across the two transports — keep `IncomingEdge` (REST, number) and the MCP
-   edge object (string) separate.
-5. **Auth-not-configured returns 401 for remote.** If Scrypt has no token configured, every remote
-   uxie call gets `401`. Boot-time env (`SCRYPT_AUTH`) must be present; a misconfigured Scrypt side is
-   indistinguishable from a bad uxie token at the 401 level — surface 401 distinctly in error replies.
+1. **Journal tz — RESOLVED.** `kind: journal` no longer exists; journal writes go through `POST /api/journal/:date/entries`. The server stamps each entry with a **full UTC ISO timestamp** (`nowIso()`), which is both the entry's `##` heading and its stable `id`. Still no client tz input, but the stored value is now an unambiguous instant — uxie renders it in `USER_TZ` from the returned `id` instead of prepending a local-time line into `content`. (`src/server/api/journal.ts`, `src/shared/date.ts`)
+2. **Permalink scheme — RESOLVED.** `${SCRYPT_SERVER_URL}/note/<vault-path>` (path includes `.md`), confirmed against the SPA router (§3). Clickable permalinks in embeds are safe.
+3. **`get_note` `sections`/`metadata` shapes — RESOLVED.** Enumerated in §2.2 from `SectionsRepo.listByNote()` / `MetadataRepo.get()`; replace the loose `z.array(z.unknown())` / `z.record(z.unknown())` schemas with `NoteSection[]` / `NoteMetadataBlock`.
+4. **REST vs MCP edge `tier` type mismatch — RESOLVED.** REST `incoming_edges[].tier` is now a string enum (`"connected" | "mentions" | "semantically_related"` via `parseTier`), identical to MCP. One shared `Edge` schema (§1.7).
+5. **Auth-not-configured returns 401 for remote — REMAINS (by design, per S7).** Confirmed unchanged in `src/server/auth.ts`: remote callers without a valid Bearer get an empty-body `401`, including when the server simply has no token configured. New in this branch: the loopback bypass is keyed on the real socket peer, so `Host: localhost` spoofing is closed, and `/ws` is behind the same gate. Operational requirement stands: `SCRYPT_AUTH` must be present at uxie boot and 401s must be surfaced distinctly.
