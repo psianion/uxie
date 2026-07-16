@@ -2,9 +2,11 @@
 // daemon event type, posting into the session's Discord thread. Fakes follow the repo
 // convention: plain objects + bun:test mock(), no framework.
 import { describe, expect, mock, test } from "bun:test";
-import { AttachmentBuilder, DiscordAPIError, RESTJSONErrorCodes } from "discord.js";
+import { AttachmentBuilder, ChannelType, DiscordAPIError, RESTJSONErrorCodes } from "discord.js";
 import { createEventHandler, PAUSED_HINT, type EventDeps } from "../../../src/integrations/para-raid/events.ts";
 import type { ParaRaidEvent } from "../../../src/integrations/para-raid/receiver.ts";
+import { SessionCache } from "../../../src/integrations/para-raid/sessions.ts";
+import type { ParaRaidClient, Session } from "../../../src/integrations/para-raid/client.ts";
 import { setLogSink, type LogEntry } from "../../../src/lib/log.ts";
 
 const THREAD_ID = "thread-1";
@@ -51,6 +53,8 @@ function rig(over: {
     sessions: {
       resolveBySession: async (id: string) =>
         id === SESSION_ID ? { id, adapter_ref: THREAD_ID, status: "live" } : undefined,
+      threadFor: (s: { adapter_ref: string }) => s.adapter_ref,
+      registerThread: mock(() => {}),
       liveThreadIds: async () => over.liveThreads ?? [THREAD_ID],
     },
   } as unknown as EventDeps;
@@ -215,6 +219,17 @@ describe("unknown event types", () => {
   });
 });
 
+function unknownChannelError(): DiscordAPIError {
+  return new DiscordAPIError(
+    { message: "Unknown Channel", code: RESTJSONErrorCodes.UnknownChannel },
+    RESTJSONErrorCodes.UnknownChannel,
+    404,
+    "GET",
+    "https://discord.com/api/v10/channels/thread-1",
+    { body: undefined, files: undefined },
+  );
+}
+
 describe("thread posting mechanics", () => {
   test("an archived thread is unarchived before posting", async () => {
     const thread = fakeThread({ archived: true });
@@ -223,17 +238,6 @@ describe("thread posting mechanics", () => {
     expect(thread.setArchived).toHaveBeenCalledWith(false);
     expect(thread.send).toHaveBeenCalledWith("session live");
   });
-
-  function unknownChannelError(): DiscordAPIError {
-    return new DiscordAPIError(
-      { message: "Unknown Channel", code: RESTJSONErrorCodes.UnknownChannel },
-      RESTJSONErrorCodes.UnknownChannel,
-      404,
-      "GET",
-      "https://discord.com/api/v10/channels/thread-1",
-      { body: undefined, files: undefined },
-    );
-  }
 
   test("Unknown Channel on fetch reaps the session and resolves (acks — no retry loop, A2)", async () => {
     const r = rig({
@@ -271,5 +275,137 @@ describe("thread posting mechanics", () => {
     const r = rig({ thread });
     await expect(r.handle(evt("session_live"))).rejects.toThrow("ECONNRESET");
     expect(r.closeSession).not.toHaveBeenCalled();
+  });
+});
+
+// U6: unmapped librarian sessions. Uses the REAL SessionCache so the registration + refresh
+// mechanics are exercised, not faked — only the daemon client and Discord are stubs.
+describe("librarian sessions (U6 — adapter_ref is not a thread id)", () => {
+  const LIB_SESSION_ID = "s-lib";
+  const LIB_REF = "librarian:2026-07-16";
+  const LIB_CHANNEL_ID = "123456789012345678";
+  const LIB_THREAD_ID = "999999999999999999";
+
+  function libSession(over: Partial<Session> = {}): Session {
+    return {
+      id: LIB_SESSION_ID,
+      adapter_id: "uxie",
+      adapter_ref: LIB_REF,
+      status: "live",
+      tmux_session: "tmux-lib",
+      cwd: "/work",
+      created_at: 1,
+      updated_at: 2,
+      last_turn_at: null,
+      recovery_expires_at: null,
+      ...over,
+    };
+  }
+
+  interface LibRig {
+    handle: (e: ParaRaidEvent) => Promise<void>;
+    sessions: SessionCache;
+    create: ReturnType<typeof mock>;
+    createdThread: any;
+    channelFetch: ReturnType<typeof mock>;
+    closeSession: ReturnType<typeof mock>;
+  }
+
+  function libRig(over: {
+    channelId?: string | undefined; // pass the key with undefined to model "env absent"
+    activeThreads?: any[];
+    daemonSessions?: () => Session[];
+    channelFetch?: (id: string) => Promise<unknown>;
+  } = {}): LibRig {
+    const sessions = new SessionCache({
+      listSessions: async () => ({
+        status: 200,
+        body: { sessions: (over.daemonSessions ?? (() => [libSession()]))(), next_cursor: null },
+      }),
+    } as unknown as ParaRaidClient);
+    const createdThread = fakeThread({ id: LIB_THREAD_ID, name: LIB_REF });
+    const create = mock(async (_: { name: string }) => createdThread);
+    const active = over.activeThreads ?? [];
+    const channel = {
+      type: ChannelType.GuildText,
+      threads: {
+        fetchActive: async () => ({ threads: { find: (fn: (t: any) => boolean) => active.find(fn) } }),
+        create,
+      },
+    };
+    const threadsById: Record<string, any> = { [LIB_THREAD_ID]: createdThread };
+    for (const t of active) threadsById[t.id] = t;
+    const channelFetch = mock(
+      over.channelFetch ??
+        (async (id: string) => (id === LIB_CHANNEL_ID ? channel : (threadsById[id] ?? null))),
+    );
+    const closeSession = mock(async (_: { session_id: string }) => ({ status: 200, body: {} }));
+    const deps = {
+      client: { channels: { fetch: channelFetch } },
+      api: { closeSession },
+      sessions,
+      librarianChannelId: "channelId" in over ? over.channelId : LIB_CHANNEL_ID,
+    } as unknown as EventDeps;
+    return { handle: createEventHandler(deps), sessions, create, createdThread, channelFetch, closeSession };
+  }
+
+  test("creates a public thread named the adapter_ref, registers it, and the digest lands via the normal turn_replied path", async () => {
+    const r = libRig();
+    await r.handle(evt("session_live", {}, LIB_SESSION_ID));
+    expect(r.create).toHaveBeenCalledWith({ name: LIB_REF });
+    expect(r.createdThread.send).toHaveBeenCalledWith("session live");
+
+    // Subsequent event: no second create/fetchActive — the registered mapping serves it.
+    await r.handle(evt("turn_replied", { reply: "nightly digest" }, LIB_SESSION_ID));
+    expect(r.createdThread.send).toHaveBeenCalledWith("nightly digest");
+    expect(r.create).toHaveBeenCalledTimes(1);
+  });
+
+  test("dedups via an existing active thread with the exact adapter_ref name (in-memory cache lost on restart)", async () => {
+    const existing = fakeThread({ id: "888888888888888888", name: LIB_REF });
+    const r = libRig({ activeThreads: [existing, fakeThread({ id: "777", name: "other" })] });
+    await r.handle(evt("turn_replied", { reply: "digest after restart" }, LIB_SESSION_ID));
+    expect(r.create).not.toHaveBeenCalled();
+    expect(existing.send).toHaveBeenCalledWith("digest after restart");
+  });
+
+  test("LIBRARIAN_CHANNEL_ID absent: librarian events are logged + dropped, Discord untouched", async () => {
+    const r = libRig({ channelId: undefined });
+    const logs = await captureLogs(() => r.handle(evt("turn_replied", { reply: "digest" }, LIB_SESSION_ID)));
+    expect(r.channelFetch).not.toHaveBeenCalled();
+    expect(r.create).not.toHaveBeenCalled();
+    expect(logs.some((e) => e.level === "warn" && e.msg.includes("LIBRARIAN_CHANNEL_ID"))).toBe(true);
+  });
+
+  test("a non-librarian unknown session id is still dropped with a warning (no thread created)", async () => {
+    const r = libRig();
+    const logs = await captureLogs(() => r.handle(evt("session_live", {}, "never-seen")));
+    expect(r.create).not.toHaveBeenCalled();
+    expect(logs.some((e) => e.level === "warn" && e.msg.includes("unknown session"))).toBe(true);
+  });
+
+  test("a non-librarian non-thread ref never enters the librarian path", async () => {
+    const cron = libSession({ id: "s-cron", adapter_ref: "cron:2026-07-16" });
+    const r = libRig({ daemonSessions: () => [cron] });
+    await captureLogs(() => r.handle(evt("session_live", {}, "s-cron")));
+    // Falls through to the normal post path (fetch of the raw ref finds nothing → reap + ack).
+    expect(r.create).not.toHaveBeenCalled();
+    expect(r.closeSession).toHaveBeenCalledWith({ session_id: "s-cron" });
+  });
+
+  test("librarian channel Unknown Channel: reaps the session and resolves (acks, never crashes)", async () => {
+    const r = libRig({
+      channelFetch: async () => {
+        throw unknownChannelError();
+      },
+    });
+    await captureLogs(() => r.handle(evt("session_live", {}, LIB_SESSION_ID))); // must resolve
+    expect(r.closeSession).toHaveBeenCalledWith({ session_id: LIB_SESSION_ID });
+  });
+
+  test("librarian channel vanished/not-a-text-channel: reaps the session and resolves", async () => {
+    const r = libRig({ channelFetch: async () => null });
+    await captureLogs(() => r.handle(evt("session_live", {}, LIB_SESSION_ID)));
+    expect(r.closeSession).toHaveBeenCalledWith({ session_id: LIB_SESSION_ID });
   });
 });

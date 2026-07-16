@@ -125,6 +125,49 @@ describe("SessionCache — invalidate", () => {
   });
 });
 
+// U6: librarian sessions carry adapter_ref "librarian:<date>" — not a thread id — so events.ts
+// registers the thread it created and the cache must key everything by that thread from then on.
+describe("SessionCache — registerThread (U6)", () => {
+  const LIB_REF = "librarian:2026-07-16";
+
+  test("registration rekeys the session under the thread id; the raw adapter_ref stops resolving", async () => {
+    const s = session("s-lib", LIB_REF, "live");
+    const { client } = fakeClient(() => [s]);
+    const cache = new SessionCache(client);
+    await cache.resolveBySession("s-lib"); // warm
+
+    cache.registerThread("s-lib", "thread-9");
+    expect(await cache.resolveByThread("thread-9")).toEqual(s);
+    expect(cache.threadFor(s)).toBe("thread-9");
+    expect(await cache.resolveByThread(LIB_REF)).toBeUndefined();
+  });
+
+  test("registration survives a refresh (rebuild uses the registered thread as the key)", async () => {
+    const s = session("s-lib", LIB_REF, "live");
+    const { client } = fakeClient(() => [s]);
+    const cache = new SessionCache(client);
+    cache.registerThread("s-lib", "thread-9"); // registered before the cache ever saw the session
+    // This miss forces a refresh; the rebuild must land the session under thread-9.
+    expect(await cache.resolveByThread("thread-9")).toEqual(s);
+    expect(cache.threadFor(s)).toBe("thread-9");
+  });
+
+  test("registration ages out when the daemon stops listing the session", async () => {
+    const s = session("s-lib", LIB_REF, "live");
+    let rows = [s];
+    const { client } = fakeClient(() => rows);
+    const cache = new SessionCache(client);
+    await cache.resolveBySession("s-lib");
+    cache.registerThread("s-lib", "thread-9");
+
+    rows = []; // session gone from the daemon
+    await cache.resolveBySession("anything"); // refresh prunes the dead registration
+    rows = [s]; // a NEW day's run could reuse the id in theory — the old thread must not stick
+    expect(await cache.resolveByThread("thread-9")).toBeUndefined();
+    expect(await cache.resolveByThread(LIB_REF)).toEqual(s); // back to adapter_ref keying
+  });
+});
+
 describe("SessionCache — liveThreadIds", () => {
   test("always refreshes first and returns only live-status thread ids (A8 fanout)", async () => {
     const rows = [

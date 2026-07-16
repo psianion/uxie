@@ -3,6 +3,7 @@
 // whole process down via index.ts's unhandledRejection handler.
 import { describe, expect, mock, test } from "bun:test";
 import { relayMessage, type RelayDeps } from "../../../src/integrations/para-raid/relay.ts";
+import { SessionCache } from "../../../src/integrations/para-raid/sessions.ts";
 import { PAUSED_HINT } from "../../../src/integrations/para-raid/events.ts";
 import { setLogSink, type LogEntry } from "../../../src/lib/log.ts";
 
@@ -114,6 +115,37 @@ describe("relayMessage — send_turn failures", () => {
     await relayMessage(msg, deps);
     expect(msg.reply).toHaveBeenCalledWith("send_turn failed (500)");
     expect(invalidate).not.toHaveBeenCalled();
+  });
+});
+
+// U6: a librarian thread was registered by events.ts (adapter_ref "librarian:<date>" is not the
+// thread id). The relay must resolve it through the REAL SessionCache mapping — no special path.
+describe("relayMessage — librarian thread (U6)", () => {
+  test("owner message in a registered librarian thread relays as a turn to the librarian session", async () => {
+    const libSession = {
+      id: "s-lib",
+      adapter_id: "uxie",
+      adapter_ref: "librarian:2026-07-16",
+      status: "live",
+      tmux_session: "tmux-lib",
+      cwd: "/work",
+      created_at: 1,
+      updated_at: 2,
+      last_turn_at: null,
+      recovery_expires_at: null,
+    };
+    const sessions = new SessionCache({
+      listSessions: async () => ({ status: 200, body: { sessions: [libSession], next_cursor: null } }),
+    } as never);
+    sessions.registerThread("s-lib", "lib-thread-1");
+
+    const sendTurn = mock(async (_: { session_id: string; prompt: string }) => ({ status: 200, body: {} }));
+    const msg = fakeMessage({ channel: { isThread: () => true, id: "lib-thread-1" }, content: "dig deeper on item 3" });
+    const deps = { client: {} as never, api: { sendTurn }, sessions, ownerId: OWNER } as unknown as RelayDeps;
+
+    await relayMessage(msg, deps);
+    expect(sendTurn).toHaveBeenCalledWith({ session_id: "s-lib", prompt: "dig deeper on item 3" });
+    expect(msg.react).toHaveBeenCalledWith("⏳");
   });
 });
 

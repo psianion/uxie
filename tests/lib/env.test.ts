@@ -116,4 +116,19 @@ describe("parseEnv — para-raid env group (D4)", () => {
     expect(parseEnv(complete).PARARAID_WEBHOOK_PORT).toBe(18901);
     expect(parseEnv({ ...complete, PARARAID_WEBHOOK_PORT: "9000" }).PARARAID_WEBHOOK_PORT).toBe(9000);
   });
+
+  // U6: LIBRARIAN_CHANNEL_ID is optional and OUTSIDE the all-or-none group — absent just means
+  // the librarian handler is off.
+  test("LIBRARIAN_CHANNEL_ID is optional; absent means undefined, without the para-raid group too", () => {
+    expect(parseEnv(complete).LIBRARIAN_CHANNEL_ID).toBeUndefined();
+    expect(parseEnv({ ...complete, ...paraRaidVars }).LIBRARIAN_CHANNEL_ID).toBeUndefined();
+  });
+
+  test("LIBRARIAN_CHANNEL_ID accepts a snowflake and rejects a non-snowflake, naming the field", () => {
+    const id = "123456789012345678";
+    expect(parseEnv({ ...complete, LIBRARIAN_CHANNEL_ID: id }).LIBRARIAN_CHANNEL_ID).toBe(id);
+    expect(() => parseEnv({ ...complete, LIBRARIAN_CHANNEL_ID: "librarian-channel" })).toThrow(
+      /LIBRARIAN_CHANNEL_ID/,
+    );
+  });
 });

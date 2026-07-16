@@ -43,7 +43,12 @@ export function startParaRaidRuntime(mod: ParaRaidModule, client: Client, env: E
     receiver = startReceiver({
       port: env.PARARAID_WEBHOOK_PORT,
       secret: env.PARARAID_SIGNING_SECRET!,
-      handler: createEventHandler({ client, api: mod.client, sessions: mod.sessions }),
+      handler: createEventHandler({
+        client,
+        api: mod.client,
+        sessions: mod.sessions,
+        librarianChannelId: env.LIBRARIAN_CHANNEL_ID,
+      }),
     });
     log.info("para-raid webhook receiver started", { port: receiver.port });
   };
