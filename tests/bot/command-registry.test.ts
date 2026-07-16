@@ -29,7 +29,16 @@ describe("buildCommandRegistry", () => {
   test("contains exactly the expected command names (no duplicates / no extras)", () => {
     const reg = buildCommandRegistry(env);
     const names = [...reg.keys()].sort();
-    expect(names).toEqual(["create-category", "create-channel", "create-role", "ping"]);
+    expect(names).toEqual([
+      "brief",
+      "capture",
+      "create-category",
+      "create-channel",
+      "create-role",
+      "journal",
+      "ping",
+      "search",
+    ]);
   });
 
   test("does not throw on the real module set (no cross-module name collision)", () => {
