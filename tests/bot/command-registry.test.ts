@@ -35,9 +35,16 @@ describe("buildCommandRegistry", () => {
       "create-category",
       "create-channel",
       "create-role",
+      "delete-channel",
+      "delete-role",
+      "edit-channel",
+      "edit-role",
       "journal",
+      "list-structure",
       "ping",
+      "purge",
       "search",
+      "sup",
     ]);
   });
 

@@ -17,6 +17,7 @@ import { paraRaidEnabled, type Env } from "../lib/env.ts";
 import { buildScryptModule } from "../integrations/scrypt/index.ts";
 import { buildServerModule } from "../integrations/server/index.ts";
 import { buildParaRaidModule } from "../integrations/para-raid/index.ts";
+import { buildSupModule } from "../integrations/sup/index.ts";
 import { mergeCommands } from "../lib/merge-commands.ts";
 
 export function buildCommandRegistry(
@@ -27,7 +28,10 @@ export function buildCommandRegistry(
     : undefined,
 ): Collection<string, LoadedCommand> {
   const server = buildServerModule(env);
-  const collections = [scrypt.commands, server.commands];
+  // sup borrows the scrypt/para-raid clients from the modules built above, so /sup status
+  // probes the same live connections the per-app commands use (create-once-share-everywhere).
+  const sup = buildSupModule(env, scrypt.rest, paraRaid?.client);
+  const collections = [scrypt.commands, server.commands, sup.commands];
   if (paraRaid) collections.push(paraRaid.commands);
   return mergeCommands(...collections);
 }

@@ -4,14 +4,21 @@ import { buildServerModule } from "../../../src/integrations/server/index.ts";
 import type { Env } from "../../../src/lib/env.ts";
 
 describe("buildServerModule", () => {
-  test("returns { commands } as a Collection of exactly create-category + create-channel + create-role", () => {
+  test("returns { commands } as a Collection of exactly the nine server commands", () => {
     // env is unused by buildServerModule; an empty cast is acceptable per the plan.
     const mod = buildServerModule({} as Env);
     expect(mod.commands).toBeInstanceOf(Collection);
-    expect(mod.commands.size).toBe(3);
-    expect(mod.commands.has("create-category")).toBe(true);
-    expect(mod.commands.has("create-channel")).toBe(true);
-    expect(mod.commands.has("create-role")).toBe(true);
+    expect([...mod.commands.keys()].sort()).toEqual([
+      "create-category",
+      "create-channel",
+      "create-role",
+      "delete-channel",
+      "delete-role",
+      "edit-channel",
+      "edit-role",
+      "list-structure",
+      "purge",
+    ]);
   });
 
   test("each command exposes data + execute", () => {
