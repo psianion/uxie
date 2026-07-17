@@ -8,11 +8,15 @@
 // name+message+stack string; cycles become "[Circular]"; long strings/arrays are
 // truncated so a stray large payload can never flood the log line.
 
-type Level = "info" | "warn" | "error";
+// "notice" is info-priority but marked notable: the Discord log sink mirrors it (info stays
+// stdout-only), so operator-visible events (command ok, session lifecycle) reach the logs
+// channel without promoting them to warn.
+type Level = "info" | "notice" | "warn" | "error";
 type Fields = Record<string, unknown>;
 
 export interface Logger {
   info(msg: string, fields?: Fields): void;
+  notice(msg: string, fields?: Fields): void;
   warn(msg: string, fields?: Fields): void;
   error(msg: string, fields?: Fields): void;
   child(scope: Fields): Logger;
@@ -114,6 +118,7 @@ function emit(level: Level, scope: Fields, msg: string, fields: Fields = {}) {
 function make(scope: Fields): Logger {
   return {
     info: (msg, f) => emit("info", scope, msg, f),
+    notice: (msg, f) => emit("notice", scope, msg, f),
     warn: (msg, f) => emit("warn", scope, msg, f),
     error: (msg, f) => emit("error", scope, msg, f),
     child: (extra) => make({ ...scope, ...extra }),

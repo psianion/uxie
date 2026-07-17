@@ -9,7 +9,7 @@ import {
   ScryptBadRequestError,
   UxieError,
 } from "../../src/lib/errors.ts";
-import { fakeInteraction, fakeButton } from "../helpers.ts";
+import { fakeInteraction, fakeButton, fakeMessageCommandInteraction } from "../helpers.ts";
 import type { LoadedCommand } from "../../src/bot/command-loader.ts";
 import type { ComponentHandler } from "../../src/bot/interaction-router.ts";
 
@@ -284,5 +284,55 @@ describe("handleInteraction — onboarding buttons", () => {
     await handleInteraction(i, makeCommands(execute), "123", { onboarding });
     expect(execute).toHaveBeenCalled();
     expect(onboarding.handleRolePick).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleInteraction — message context-menu commands", () => {
+  function makeMessageCommands(execute: (i: any, ctx: any) => Promise<void>) {
+    const c = new Collection<string, any>();
+    c.set("Triage", { data: { name: "Triage" } as any, execute });
+    return c;
+  }
+
+  test("dispatches after deferring ephemerally (same contract as slash commands)", async () => {
+    const execute = mock(async () => {});
+    const i = fakeMessageCommandInteraction();
+    await handleInteraction(i, new Collection(), "123", {
+      messageCommands: makeMessageCommands(execute),
+    });
+    expect(i.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+    expect(execute).toHaveBeenCalled();
+  });
+
+  test("non-owner is refused pre-defer (decision 9)", async () => {
+    const execute = mock(async () => {});
+    const i = fakeMessageCommandInteraction({ user: { id: "999" } });
+    await handleInteraction(i, new Collection(), "123", {
+      messageCommands: makeMessageCommands(execute),
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(i.deferReply).not.toHaveBeenCalled();
+    expect(i.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining("not for you") }),
+    );
+  });
+
+  test("a throwing message command is caught and acked (decision 10)", async () => {
+    const execute = mock(async () => {
+      throw new UxieError("boom", "it broke");
+    });
+    const i = fakeMessageCommandInteraction();
+    await expect(
+      handleInteraction(i, new Collection(), "123", {
+        messageCommands: makeMessageCommands(execute),
+      }),
+    ).resolves.toBeUndefined();
+    expect(i.editReply).toHaveBeenCalledWith(expect.stringContaining("it broke"));
+  });
+
+  test("no messageCommands registered → ignored silently", async () => {
+    const i = fakeMessageCommandInteraction();
+    await handleInteraction(i, new Collection(), "123", {});
+    expect(i.deferReply).not.toHaveBeenCalled();
   });
 });

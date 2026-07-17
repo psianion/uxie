@@ -1,4 +1,4 @@
-// Live Discord mirror for warn+error logs. Pure + injectable (channel/timer passed in) so it is
+// Live Discord mirror for notice+warn+error logs. Pure + injectable (channel/timer passed in) so it is
 // unit-testable with no live client. NEVER calls log.* — every channel.send failure is swallowed,
 // which is the whole point: a sink that re-logged its own send errors would feedback-loop.
 import type { LogEntry } from "./log.ts";
@@ -17,7 +17,7 @@ export interface DiscordLogSinkDeps {
   maxChars?: number; // per-message cap (incl. code fence)
 }
 
-const ICON = { warn: "⚠️", error: "🔴" } as const;
+const ICON = { notice: "📣", warn: "⚠️", error: "🔴" } as const;
 const FIELD_MAX = 300; // per-field-value truncation
 const RESERVED = new Set(["t", "level", "msg"]);
 
@@ -56,7 +56,7 @@ export function createDiscordLogSink(channel: LogSinkChannel, deps: DiscordLogSi
 
   function formatLine(e: LogEntry): string {
     const time = e.t.length >= 19 ? e.t.slice(11, 19) : e.t; // HH:MM:SS from ISO
-    const icon = e.level === "error" ? ICON.error : ICON.warn;
+    const icon = e.level === "error" ? ICON.error : e.level === "warn" ? ICON.warn : ICON.notice;
     const parts: string[] = [];
     for (const [k, v] of Object.entries(e.fields)) {
       if (RESERVED.has(k)) continue;
@@ -130,7 +130,8 @@ export function createDiscordLogSink(channel: LogSinkChannel, deps: DiscordLogSi
   }
 
   function onEntry(e: LogEntry): void {
-    if (e.level !== "warn" && e.level !== "error") return;
+    // notice = notable operator events; batched on the slow timer like warn.
+    if (e.level !== "notice" && e.level !== "warn" && e.level !== "error") return;
     buf.push(formatLine(e));
     while (buf.length > maxLines) {
       buf.shift();

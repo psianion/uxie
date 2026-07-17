@@ -17,9 +17,31 @@ export function fakeInteraction(overrides: Record<string, unknown> = {}): any {
     reply: mock(async (_: unknown) => {}),
     isChatInputCommand: () => true,
     isButton: () => false,
+    isMessageContextMenuCommand: () => false,
     options: {
       getString: mock((_: string, _req?: boolean) => "q"),
     },
+    ...overrides,
+  };
+}
+
+// Fake MessageContextMenuCommandInteraction for router/message-command tests.
+export function fakeMessageCommandInteraction(overrides: Record<string, unknown> = {}): any {
+  return {
+    id: "mid-1",
+    commandName: "Triage",
+    user: { id: "123" },
+    deferred: false,
+    replied: false,
+    deferReply: mock(async function (this: any) {
+      this.deferred = true;
+    }),
+    editReply: mock(async (_: unknown) => {}),
+    reply: mock(async (_: unknown) => {}),
+    isChatInputCommand: () => false,
+    isButton: () => false,
+    isMessageContextMenuCommand: () => true,
+    targetMessage: { content: "", attachments: new Map(), embeds: [] },
     ...overrides,
   };
 }

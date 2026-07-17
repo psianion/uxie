@@ -40,6 +40,7 @@ function roleInteraction(opts: {
     replied: false,
     isChatInputCommand: () => true,
     isButton: () => false,
+    isMessageContextMenuCommand: () => false,
     deferReply: mock(async function (this: any) {
       this.deferred = true;
     }),

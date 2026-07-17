@@ -14,12 +14,13 @@ import {
   type ChatInputCommandInteraction,
   type Collection,
   type Interaction,
+  type MessageContextMenuCommandInteraction,
 } from "discord.js";
 import { UxieError, NotOwnerError, ScryptError } from "../lib/errors.ts";
 import { assertOwner } from "../lib/auth.ts";
 import { makeClientTag } from "../lib/client-tag.ts";
 import { log } from "../lib/log.ts";
-import type { LoadedCommand } from "./command-loader.ts";
+import type { LoadedCommand, MessageCommand } from "./command-loader.ts";
 import type { OnboardingHandlers } from "../integrations/onboarding/index.ts";
 
 interface ScopedLogger {
@@ -42,6 +43,8 @@ export interface ComponentHandler {
 export interface RouterOpts {
   components?: Collection<string, ComponentHandler>;
   devGuildId?: string;
+  // Message context-menu commands (right-click → Apps). Same gate/defer/catch as slash commands.
+  messageCommands?: Collection<string, MessageCommand>;
   // Onboarding button handlers. The `onboard:` namespace self-gates (guests may click role
   // buttons; the approval-handler enforces owner-only internally), so it is dispatched BEFORE
   // the owner + dev-guild-gated generic component path — NOT through it.
@@ -56,6 +59,10 @@ export async function handleInteraction(
 ): Promise<void> {
   if (i.isButton()) {
     await handleButton(i, ownerId, opts);
+    return;
+  }
+  if (i.isMessageContextMenuCommand()) {
+    await handleMessageCommand(i, ownerId, opts);
     return;
   }
   if (!i.isChatInputCommand()) return;
@@ -76,9 +83,35 @@ export async function handleInteraction(
       await ci.deferReply({ flags: MessageFlags.Ephemeral });
     }
     await cmd.execute(ci, { clientTag, log: scoped });
-    scoped.info("command ok");
+    // notice, not info: "command ok" is a notable event the Discord log sink mirrors.
+    scoped.notice("command ok");
   } catch (err) {
     await replyWithError(ci, err, scoped);
+  }
+}
+
+// Message context-menu dispatch: identical contract to slash commands (gate before defer,
+// auto-defer ephemeral, single catch site). Kept as its own function only because the
+// interaction type differs — MessageCommand has no defer:false escape hatch (none needs it).
+async function handleMessageCommand(
+  i: MessageContextMenuCommandInteraction,
+  ownerId: string,
+  opts: RouterOpts,
+): Promise<void> {
+  const cmd = opts.messageCommands?.get(i.commandName);
+  if (!cmd) return;
+
+  const clientTag = makeClientTag(i);
+  const scoped = log.child({ interactionId: i.id, command: i.commandName, clientTag });
+
+  try {
+    assertOwner(i, ownerId);
+    scoped.info("command start");
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    await cmd.execute(i, { clientTag, log: scoped });
+    scoped.notice("command ok");
+  } catch (err) {
+    await replyWithError(i, err, scoped);
   }
 }
 
@@ -103,6 +136,7 @@ async function handleButton(i: ButtonInteraction, ownerId: string, opts: RouterO
       ) {
         await onboarding.handleApprovalButton(i, ownerId);
       }
+      scoped.notice("button ok");
       // Unknown onboard: actions fall through and return without action.
     } catch (err) {
       scoped.warn("onboarding handler error", { err });
@@ -138,10 +172,13 @@ async function handleButton(i: ButtonInteraction, ownerId: string, opts: RouterO
   }
 }
 
+// Both command interaction shapes share the ack surface replyWithError needs.
+type RepliableCommand = ChatInputCommandInteraction | MessageContextMenuCommandInteraction;
+
 // Maps an error to a user-facing message and acknowledges the interaction. NEVER throws:
 // each Discord call is wrapped in safeReply / safeEdit which swallow their own rejection.
 async function replyWithError(
-  i: ChatInputCommandInteraction,
+  i: RepliableCommand,
   err: unknown,
   scoped: ScopedLogger,
 ): Promise<void> {
@@ -168,7 +205,7 @@ async function replyWithError(
 }
 
 // editReply if we already deferred, otherwise an ephemeral reply.
-async function ack(i: ChatInputCommandInteraction, msg: string): Promise<void> {
+async function ack(i: RepliableCommand, msg: string): Promise<void> {
   if (i.deferred) {
     await safeEdit(i, msg);
   } else {
@@ -176,11 +213,11 @@ async function ack(i: ChatInputCommandInteraction, msg: string): Promise<void> {
   }
 }
 
-async function safeEdit(i: ChatInputCommandInteraction, msg: string): Promise<void> {
+async function safeEdit(i: RepliableCommand, msg: string): Promise<void> {
   await i.editReply(msg).catch(() => {});
 }
 
-async function safeReply(i: ChatInputCommandInteraction, msg: string): Promise<void> {
+async function safeReply(i: RepliableCommand, msg: string): Promise<void> {
   await i
     .reply({ content: msg, flags: MessageFlags.Ephemeral, allowedMentions: { parse: [] } })
     .catch(() => {});
