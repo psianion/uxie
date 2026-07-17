@@ -1,7 +1,8 @@
 // scrypt module entry. Builds the client from validated env and the command collection; the
 // boot path wires the command collection into the interaction-router. Commands: /ping (health
 // panel), /capture (MCP create_note → projects/_inbox), /journal (journal append), /search
-// (hybrid search + confidence gate), /brief (daily context). Always on: SCRYPT_SERVER_URL +
+// (hybrid search + confidence gate), /brief (daily context), /archive-thread (thread transcript
+// → vault note). Always on: SCRYPT_SERVER_URL +
 // SCRYPT_AUTH are required env, so there is no feature flag to check.
 import { hostname } from "node:os";
 import { Collection } from "discord.js";
@@ -13,11 +14,12 @@ import { buildCaptureCommand } from "./commands/capture.ts";
 import { buildJournalCommand } from "./commands/journal.ts";
 import { buildSearchCommand } from "./commands/search.ts";
 import { buildBriefCommand } from "./commands/brief.ts";
+import { buildArchiveThreadCommand } from "./commands/archive-thread.ts";
 import { buildPingComponentHandler } from "./ping/handler.ts";
 import type { Env } from "../../lib/env.ts";
 
 export interface ScryptModule {
-  commands: ReturnType<typeof buildCommandCollection>;
+  commands: Collection<string, LoadedCommand>;
   components: Collection<string, ComponentHandler>;
   rest: ScryptRestClient;
 }
@@ -42,6 +44,7 @@ export function buildScryptModule(env: Env): ScryptModule {
     buildJournalCommand(rest),
     buildSearchCommand(rest),
     buildBriefCommand(rest),
+    buildArchiveThreadCommand(rest),
   ];
 
   // Restart deps are wired ONLY when the capability is enabled; secrets are passed so any

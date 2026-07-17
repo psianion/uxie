@@ -12,12 +12,14 @@
 // definitions, not live clients); /raid is present in the deployed set iff paraRaidEnabled(env)
 // (D6) — deploy runs off the same env file as boot, so definitions and runtime stay coherent.
 import { Collection } from "discord.js";
-import type { LoadedCommand } from "./command-loader.ts";
+import type { LoadedCommand, MessageCommand } from "./command-loader.ts";
 import { paraRaidEnabled, type Env } from "../lib/env.ts";
+import { guildConfig } from "../config/guild.ts";
 import { buildScryptModule } from "../integrations/scrypt/index.ts";
 import { buildServerModule } from "../integrations/server/index.ts";
 import { buildParaRaidModule } from "../integrations/para-raid/index.ts";
 import { buildSupModule } from "../integrations/sup/index.ts";
+import { buildTriageModule } from "../integrations/triage/index.ts";
 import { mergeCommands } from "../lib/merge-commands.ts";
 
 export function buildCommandRegistry(
@@ -34,4 +36,22 @@ export function buildCommandRegistry(
   const collections = [scrypt.commands, server.commands, sup.commands];
   if (paraRaid) collections.push(paraRaid.commands);
   return mergeCommands(...collections);
+}
+
+// Message context-menu commands, same never-drift contract: boot and deploy both call this.
+// Triage is on iff para-raid is enabled AND the operator set a triage channel — off means the
+// definition is not even deployed. `cfg` is injectable so tests don't depend on live config.
+export function buildMessageCommandRegistry(
+  env: Env,
+  paraRaid: ReturnType<typeof buildParaRaidModule> | undefined = paraRaidEnabled(env)
+    ? buildParaRaidModule(env)
+    : undefined,
+  // Widened to string (not `typeof guildConfig`'s literal types) so tests can pass real ids.
+  cfg: { triageChannelId: string; triageBundle: string } = guildConfig,
+): Collection<string, MessageCommand> {
+  if (!paraRaid || !cfg.triageChannelId) return new Collection();
+  return buildTriageModule(paraRaid.client, {
+    triageChannelId: cfg.triageChannelId,
+    bundle: cfg.triageBundle || undefined,
+  }).messageCommands;
 }

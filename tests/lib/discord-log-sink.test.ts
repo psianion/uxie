@@ -52,7 +52,7 @@ function mk(channel: LogSinkChannel, timer: ReturnType<typeof fakeTimer>, over =
 }
 
 describe("createDiscordLogSink", () => {
-  test("ignores info entries (warn+error only)", async () => {
+  test("ignores info entries (notice+warn+error only)", async () => {
     const { channel, sent } = fakeChannel();
     const t = fakeTimer();
     const sink = mk(channel, t);
@@ -60,6 +60,19 @@ describe("createDiscordLogSink", () => {
     expect(t.pendingMs()).toBe(null); // nothing scheduled
     await sink.flush();
     expect(sent.length).toBe(0);
+  });
+
+  test("mirrors notice entries with the 📣 icon on the slow timer", async () => {
+    const { channel, sent } = fakeChannel();
+    const t = fakeTimer();
+    const sink = mk(channel, t);
+    sink.onEntry(entry({ level: "notice" as LogEntry["level"], msg: "command ok" }));
+    expect(t.pendingMs()).toBe(1500); // slowMs, same batching as warn
+    t.fire();
+    await sink.flush();
+    expect(sent.length).toBe(1);
+    expect(sent[0]!).toContain("📣");
+    expect(sent[0]!).toContain("command ok");
   });
 
   test("formats one line: time, icon, msg, fields; err collapsed to first line", async () => {

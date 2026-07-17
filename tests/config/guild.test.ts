@@ -121,4 +121,11 @@ describe("assertGuildConfig", () => {
     const cfg = { ...validConfig(), logChannelId: "123" } as unknown as typeof guildConfig;
     expectReject(cfg, "logChannelId");
   });
+
+  test("triageChannelId: empty accepted (triage off), malformed rejected", () => {
+    const off = { ...validConfig(), triageChannelId: "" } as unknown as typeof guildConfig;
+    expect(() => assertGuildConfig(off)).not.toThrow();
+    const bad = { ...validConfig(), triageChannelId: "123" } as unknown as typeof guildConfig;
+    expectReject(bad, "triageChannelId");
+  });
 });

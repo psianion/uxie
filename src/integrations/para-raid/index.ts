@@ -6,8 +6,8 @@
 // startParaRaidRuntime(mod, client, env) is called ONLY from the boot path (src/index.ts): it
 // registers the MessageCreate relay and starts the webhook receiver, returning stop() for the
 // shutdown path.
-import { Events, type Client } from "discord.js";
-import { buildCommandCollection } from "../../bot/command-loader.ts";
+import { Events, type Client, type Collection } from "discord.js";
+import { buildCommandCollection, type LoadedCommand } from "../../bot/command-loader.ts";
 import type { Env } from "../../lib/env.ts";
 import { log } from "../../lib/log.ts";
 import { ParaRaidClient } from "./client.ts";
@@ -18,7 +18,7 @@ import { createEventHandler } from "./events.ts";
 import { relayMessage } from "./relay.ts";
 
 export interface ParaRaidModule {
-  commands: ReturnType<typeof buildCommandCollection>;
+  commands: Collection<string, LoadedCommand>;
   client: ParaRaidClient;
   sessions: SessionCache;
 }

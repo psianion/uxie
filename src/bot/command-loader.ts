@@ -6,6 +6,8 @@
 import {
   Collection,
   type ChatInputCommandInteraction,
+  type ContextMenuCommandBuilder,
+  type MessageContextMenuCommandInteraction,
   type SlashCommandBuilder,
 } from "discord.js";
 
@@ -29,8 +31,19 @@ export interface LoadedCommand {
   defer?: boolean;
 }
 
-export function buildCommandCollection(cmds: LoadedCommand[]): Collection<string, LoadedCommand> {
-  const c = new Collection<string, LoadedCommand>();
+// A message context-menu command (right-click a message → Apps). Same router contract as
+// LoadedCommand (owner gate + auto-defer + single catch site), different interaction type.
+export interface MessageCommand {
+  data: ContextMenuCommandBuilder;
+  execute: (i: MessageContextMenuCommandInteraction, ctx: CommandContext) => Promise<void>;
+}
+
+// Generic so the same duplicate-rejecting fold serves both slash (LoadedCommand) and message
+// (MessageCommand) collections; T defaults to LoadedCommand for bare calls.
+export function buildCommandCollection<T extends { data: { name: string } } = LoadedCommand>(
+  cmds: T[],
+): Collection<string, T> {
+  const c = new Collection<string, T>();
   for (const cmd of cmds) {
     const name = cmd.data.name;
     if (c.has(name)) throw new Error(`duplicate command name: ${name}`);

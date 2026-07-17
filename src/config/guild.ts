@@ -17,9 +17,18 @@ export const guildConfig = {
   accessRequestsChannelId: "1519115092908707951",
   guestRoleId: "1519115363332259871",
 
-  // Owner-only live log channel for warn+error mirroring. Empty = disabled (sink OFF). Set to a
-  // private channel id to mirror logs there. Validated as a snowflake only when non-empty.
+  // Owner-only live log channel for notice+warn+error mirroring. Empty = disabled (sink OFF).
+  // Set to a private channel id to mirror logs there. Validated as a snowflake only when non-empty.
   logChannelId: "1519677387397271602",
+
+  // Triage flow (message context-menu "Triage"): each triaged link/attachment gets a thread in
+  // this channel + a para-raid session that quick-checks it, then waits for in-thread direction
+  // (research / ingest into scrypt via the session's MCP bundle). Empty = triage OFF (the
+  // command is neither deployed nor routed). Validated as a snowflake only when non-empty.
+  triageChannelId: "",
+  // MCP bundle handed to triage sessions (must exist in para-raid's bundle registry so the
+  // session can reach scrypt). Empty = open the session with no bundle.
+  triageBundle: "scrypt",
 
   // Roles a guest can request. Each renders as its own Components V2 Section on the welcome
   // picker (live role name + blurb + member count + a "Request" button accessory).
@@ -73,6 +82,8 @@ export function assertGuildConfig(cfg: typeof guildConfig = guildConfig): void {
 
   // Optional: a blank logChannelId disables the log sink; only validate a non-empty value.
   if (cfg.logChannelId) assertSnowflake(cfg.logChannelId, "logChannelId");
+  // Same contract for triage: blank = feature off.
+  if (cfg.triageChannelId) assertSnowflake(cfg.triageChannelId, "triageChannelId");
 
   // `as const` types the default pickableRoleIds.length as a literal; widen to number so the
   // empty-picker guard also covers configs passed in by callers/tests.

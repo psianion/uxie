@@ -9,9 +9,10 @@ import { createDiscordLogSink, type LogSinkChannel } from "./lib/discord-log-sin
 import { createDiscordClient } from "./bot/client.ts";
 import { handleInteraction } from "./bot/interaction-router.ts";
 import { buildScryptModule } from "./integrations/scrypt/index.ts";
-import { buildCommandRegistry } from "./bot/command-registry.ts";
+import { buildCommandRegistry, buildMessageCommandRegistry } from "./bot/command-registry.ts";
 import { buildOnboardingModule } from "./integrations/onboarding/index.ts";
 import { buildParaRaidModule, startParaRaidRuntime } from "./integrations/para-raid/index.ts";
+import { startWatchdog } from "./integrations/sup/watchdog.ts";
 
 // Active Discord log sink (set at ClientReady when guildConfig.logChannelId is configured). The
 // crash handlers flush it best-effort before exit so the last warn/error reaches the channel.
@@ -56,6 +57,9 @@ const client = createDiscordClient(relayEnabled);
 const scrypt = buildScryptModule(env);
 const paraRaid = relayEnabled ? buildParaRaidModule(env) : undefined;
 const allCommands = buildCommandRegistry(env, scrypt, paraRaid);
+// Message context-menu commands (triage) — empty Collection when para-raid is off or no
+// triage channel is configured, so the router path is inert rather than conditional.
+const messageCommands = buildMessageCommandRegistry(env, paraRaid);
 // Registers GuildMemberAdd (guest-role assignment) + the ready-time #welcome reconcile, and
 // returns the two button handlers the router dispatches the onboard: namespace to.
 const onboarding = buildOnboardingModule(env, client);
@@ -64,11 +68,15 @@ const onboarding = buildOnboardingModule(env, client);
 // when the module is off.
 const paraRaidRuntime = paraRaid ? startParaRaidRuntime(paraRaid, client, env) : undefined;
 
-client.once(Events.ClientReady, async (c) => {
-  log.info("uxie ready", { tag: c.user.tag, guild: env.DISCORD_DEV_GUILD_ID });
+// SUP watchdog: probes scrypt/para-raid every 5 min and logs down/recovered transitions at
+// warn/notice, which the sink below mirrors to the logs channel. Started at ready so the sink
+// is (about to be) attached when the first transition can fire; stopped in shutdown().
+let watchdog: ReturnType<typeof startWatchdog> | null = null;
 
+client.once(Events.ClientReady, async (c) => {
   // Attach the live log sink only if the operator pointed logChannelId at a real, sendable channel.
   // On any failure, log to stdout (sink not yet attached) and leave mirroring off — boot continues.
+  // Attached FIRST so the ready notice below (and any immediate watchdog transition) is mirrored.
   if (guildConfig.logChannelId) {
     try {
       const ch = await c.channels.fetch(guildConfig.logChannelId);
@@ -83,6 +91,10 @@ client.once(Events.ClientReady, async (c) => {
       log.error("log sink channel fetch failed", { channelId: guildConfig.logChannelId, err });
     }
   }
+
+  // notice, not info: a (re)boot is a notable event the logs channel should show.
+  log.notice("uxie ready", { tag: c.user.tag, guild: env.DISCORD_DEV_GUILD_ID });
+  watchdog = startWatchdog(scrypt.rest, paraRaid?.client);
 });
 
 client.on(Events.InteractionCreate, async (i) => {
@@ -90,6 +102,7 @@ client.on(Events.InteractionCreate, async (i) => {
     components: scrypt.components,
     devGuildId: env.DISCORD_DEV_GUILD_ID,
     onboarding,
+    messageCommands,
   });
 });
 
@@ -97,6 +110,7 @@ client.on(Events.InteractionCreate, async (i) => {
 // gateway and exit cleanly. A10: also stop the para-raid webhook receiver, if it was started.
 async function shutdown(signal: string): Promise<void> {
   log.info("shutting down", { signal });
+  watchdog?.stop();
   paraRaidRuntime?.stop();
   await client.destroy();
   process.exit(0);
