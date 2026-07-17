@@ -9,6 +9,12 @@ import type { Env } from "../../lib/env.ts";
 import { buildCreateCategoryCommand } from "./commands/create-category.ts";
 import { buildCreateChannelCommand } from "./commands/create-channel.ts";
 import { buildCreateRoleCommand } from "./commands/create-role.ts";
+import { buildEditChannelCommand } from "./commands/edit-channel.ts";
+import { buildDeleteChannelCommand } from "./commands/delete-channel.ts";
+import { buildEditRoleCommand } from "./commands/edit-role.ts";
+import { buildDeleteRoleCommand } from "./commands/delete-role.ts";
+import { buildPurgeCommand } from "./commands/purge.ts";
+import { buildListStructureCommand } from "./commands/list-structure.ts";
 
 export function buildServerModule(
   _env: Env,
@@ -17,6 +23,12 @@ export function buildServerModule(
     buildCreateCategoryCommand(),
     buildCreateChannelCommand(),
     buildCreateRoleCommand(),
+    buildEditChannelCommand(),
+    buildDeleteChannelCommand(),
+    buildEditRoleCommand(),
+    buildDeleteRoleCommand(),
+    buildPurgeCommand(),
+    buildListStructureCommand(),
   ];
   return { commands: buildCommandCollection(cmds) };
 }

@@ -24,8 +24,9 @@ import { buildStatusContainer } from "../../../lib/ui/status-container.ts";
 import type { StatusModel, StatusRow } from "../../../lib/ui/status-container.ts";
 
 // Named color → hex. The slash-command `color` choice list is derived from these keys (below),
-// so the picker and the resolver can never drift.
-const COLOR_HEX: Record<string, number> = {
+// so the picker and the resolver can never drift. Exported for /edit-role, which shares the
+// exact same picker + resolution semantics.
+export const COLOR_HEX: Record<string, number> = {
   Default: 0x000000,
   Red: 0xed4245,
   Orange: 0xe67e22,
@@ -42,7 +43,7 @@ const COLOR_HEX: Record<string, number> = {
   Black: 0x23272a,
 };
 
-const COLOR_CHOICES = Object.keys(COLOR_HEX).map((name) => ({ name, value: name }));
+export const COLOR_CHOICES = Object.keys(COLOR_HEX).map((name) => ({ name, value: name }));
 
 const HEX_RE = /^#?[0-9a-fA-F]{6}$/;
 
@@ -101,7 +102,7 @@ const PERM_OPTIONS: { name: string; flag: bigint; desc: string }[] = [
   { name: "perm_mention_everyone", flag: PermissionFlagsBits.MentionEveryone, desc: "Grant Mention @everyone" },
 ];
 
-function resolveColor(colorChoice: string | null, colorHex: string | null): number | undefined {
+export function resolveColor(colorChoice: string | null, colorHex: string | null): number | undefined {
   if (colorHex !== null) {
     if (!HEX_RE.test(colorHex)) {
       throw new ConfigError("create-role", `invalid color_hex: ${colorHex}`);
