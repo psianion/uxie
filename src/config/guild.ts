@@ -36,7 +36,7 @@ export const guildConfig = {
   // ritual scheduler (morning briefing / evening nudge / weekly digest) posts here too.
   // Empty = the whole journal-channel feature set is OFF. Requires the message-content intent
   // (auto-enabled at boot when set). Validated as a snowflake only when non-empty.
-  journalChannelId: "",
+  journalChannelId: "1527885626509230180",
   // Ritual times, UTC "HH:MM" (02:30/16:30 UTC = 08:00/22:00 IST). weeklyDigestUtcDay: 0=Sunday;
   // the digest fires with that day's morning ritual and needs para-raid enabled.
   journalRituals: { morningUtc: "02:30", eveningUtc: "16:30", weeklyDigestUtcDay: 0 },
