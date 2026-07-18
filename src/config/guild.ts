@@ -27,8 +27,19 @@ export const guildConfig = {
   // command is neither deployed nor routed). Validated as a snowflake only when non-empty.
   triageChannelId: "",
   // MCP bundle handed to triage sessions (must exist in para-raid's bundle registry so the
-  // session can reach scrypt). Empty = open the session with no bundle.
+  // session can reach scrypt). Empty = open the session with no bundle. The weekly journal
+  // digest session reuses this bundle.
   triageBundle: "scrypt",
+
+  // Journal mirror channel: every owner message here is appended to today's scrypt journal
+  // (✅ on success); editing/deleting the Discord message PATCHes/DELETEs the entry. The
+  // ritual scheduler (morning briefing / evening nudge / weekly digest) posts here too.
+  // Empty = the whole journal-channel feature set is OFF. Requires the message-content intent
+  // (auto-enabled at boot when set). Validated as a snowflake only when non-empty.
+  journalChannelId: "",
+  // Ritual times, UTC "HH:MM" (02:30/16:30 UTC = 08:00/22:00 IST). weeklyDigestUtcDay: 0=Sunday;
+  // the digest fires with that day's morning ritual and needs para-raid enabled.
+  journalRituals: { morningUtc: "02:30", eveningUtc: "16:30", weeklyDigestUtcDay: 0 },
 
   // Roles a guest can request. Each renders as its own Components V2 Section on the welcome
   // picker (live role name + blurb + member count + a "Request" button accessory).
@@ -82,8 +93,20 @@ export function assertGuildConfig(cfg: typeof guildConfig = guildConfig): void {
 
   // Optional: a blank logChannelId disables the log sink; only validate a non-empty value.
   if (cfg.logChannelId) assertSnowflake(cfg.logChannelId, "logChannelId");
-  // Same contract for triage: blank = feature off.
+  // Same contract for triage + journal: blank = feature off.
   if (cfg.triageChannelId) assertSnowflake(cfg.triageChannelId, "triageChannelId");
+  if (cfg.journalChannelId) assertSnowflake(cfg.journalChannelId, "journalChannelId");
+
+  const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+  for (const key of ["morningUtc", "eveningUtc"] as const) {
+    if (!HHMM.test(cfg.journalRituals[key])) {
+      throw new ConfigError("guild_config", `guild config invalid — journalRituals.${key} is not UTC HH:MM`);
+    }
+  }
+  const day = cfg.journalRituals.weeklyDigestUtcDay as number;
+  if (!Number.isInteger(day) || day < 0 || day > 6) {
+    throw new ConfigError("guild_config", "guild config invalid — journalRituals.weeklyDigestUtcDay must be 0-6");
+  }
 
   // `as const` types the default pickableRoleIds.length as a literal; widen to number so the
   // empty-picker guard also covers configs passed in by callers/tests.

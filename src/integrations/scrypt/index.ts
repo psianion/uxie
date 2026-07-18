@@ -16,6 +16,7 @@ import { buildSearchCommand } from "./commands/search.ts";
 import { buildBriefCommand } from "./commands/brief.ts";
 import { buildArchiveThreadCommand } from "./commands/archive-thread.ts";
 import { buildPingComponentHandler } from "./ping/handler.ts";
+import { buildJournalComponentHandler } from "./journal/handler.ts";
 import type { Env } from "../../lib/env.ts";
 
 export interface ScryptModule {
@@ -58,6 +59,9 @@ export function buildScryptModule(env: Env): ScryptModule {
   );
   const components = new Collection<string, ComponentHandler>();
   components.set(pingHandler.namespace, pingHandler);
+  // /journal read's prev/next day buttons (journal:day:<date>).
+  const journalHandler = buildJournalComponentHandler(rest);
+  components.set(journalHandler.namespace, journalHandler);
 
   return {
     commands: buildCommandCollection(cmds),

@@ -22,6 +22,7 @@ import {
   CreateNoteResult,
   DailyContextResponse,
   HybridSearchResponse,
+  JournalCalendar,
   JournalDayBundle,
   McpEnvelope,
 } from "./schemas.ts";
@@ -55,6 +56,11 @@ export function captureSlug(title: string, now: Date = new Date()): string {
     .slice(0, 24)
     .replace(/-+$/, "");
   return base ? `${stamp}-${base}` : stamp;
+}
+
+// UTC day key, matching scrypt's todayKey().
+export function utcToday(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10);
 }
 
 export class ScryptRestClient {
@@ -149,12 +155,63 @@ export class ScryptRestClient {
 
   /** Append a journal entry to today's (UTC) day file. Returns the day bundle. */
   async journalEntry(body: string, clientTag: string): Promise<JournalDayBundle> {
-    const date = new Date().toISOString().slice(0, 10); // UTC day key — matches scrypt todayKey()
-    const data = await this.json(`/api/journal/${date}/entries`, {
+    const data = await this.json(`/api/journal/${utcToday()}/entries`, {
       method: "POST",
       timeoutMs: WRITE_TIMEOUT_MS,
       clientTag,
       body: JSON.stringify({ body }),
+    });
+    return this.parse(JournalDayBundle, data);
+  }
+
+  /** Day bundle (entries + tasks due + related notes) for a YYYY-MM-DD UTC day key. */
+  async journalDay(date: string, clientTag?: string): Promise<JournalDayBundle> {
+    const data = await this.json(`/api/journal/${date}`, {
+      method: "GET",
+      timeoutMs: WRITE_TIMEOUT_MS,
+      clientTag,
+    });
+    return this.parse(JournalDayBundle, data);
+  }
+
+  /** Which days have journal files (and how many entries) — drives streaks + prev/next. */
+  async journalCalendar(
+    opts: { from?: string; to?: string; clientTag?: string } = {},
+  ): Promise<JournalCalendar> {
+    const params = new URLSearchParams();
+    if (opts.from) params.set("from", opts.from);
+    if (opts.to) params.set("to", opts.to);
+    const qs = params.size > 0 ? `?${params}` : "";
+    const data = await this.json(`/api/journal/calendar${qs}`, {
+      method: "GET",
+      timeoutMs: WRITE_TIMEOUT_MS,
+      clientTag: opts.clientTag,
+    });
+    return this.parse(JournalCalendar, data);
+  }
+
+  /** Rewrite one entry's body. Entry ids are ISO timestamps — URI-encoded into the path. */
+  async journalEditEntry(
+    date: string,
+    entryId: string,
+    body: string,
+    clientTag?: string,
+  ): Promise<JournalDayBundle> {
+    const data = await this.json(`/api/journal/${date}/entries/${encodeURIComponent(entryId)}`, {
+      method: "PATCH",
+      timeoutMs: WRITE_TIMEOUT_MS,
+      clientTag,
+      body: JSON.stringify({ body }),
+    });
+    return this.parse(JournalDayBundle, data);
+  }
+
+  /** Remove one entry from a day file. */
+  async journalDeleteEntry(date: string, entryId: string, clientTag?: string): Promise<JournalDayBundle> {
+    const data = await this.json(`/api/journal/${date}/entries/${encodeURIComponent(entryId)}`, {
+      method: "DELETE",
+      timeoutMs: WRITE_TIMEOUT_MS,
+      clientTag,
     });
     return this.parse(JournalDayBundle, data);
   }
@@ -196,7 +253,7 @@ export class ScryptRestClient {
   // branch renders to the owner. Command bodies stay try/catch-free.
   private async json(
     path: string,
-    init: { method: "GET" | "POST"; timeoutMs: number; clientTag?: string; body?: string },
+    init: { method: "GET" | "POST" | "PATCH" | "DELETE"; timeoutMs: number; clientTag?: string; body?: string },
   ): Promise<unknown> {
     let res: Response;
     try {
