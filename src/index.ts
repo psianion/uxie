@@ -13,6 +13,8 @@ import { buildCommandRegistry, buildMessageCommandRegistry } from "./bot/command
 import { buildOnboardingModule } from "./integrations/onboarding/index.ts";
 import { buildParaRaidModule, startParaRaidRuntime } from "./integrations/para-raid/index.ts";
 import { startWatchdog } from "./integrations/sup/watchdog.ts";
+import { startJournalMirror } from "./integrations/journal/capture.ts";
+import { startJournalRituals } from "./integrations/journal/rituals.ts";
 
 // Active Discord log sink (set at ClientReady when guildConfig.logChannelId is configured). The
 // crash handlers flush it best-effort before exit so the last warn/error reaches the channel.
@@ -46,10 +48,11 @@ try {
   process.exit(1);
 }
 
-// D5: message intents ride on the same flag that gates the whole para-raid module — v1
-// deployments (env group unset) keep today's minimal intent set.
+// D5: message intents are needed by the para-raid relay AND the journal mirror — on iff either
+// feature is; deployments with both off keep today's minimal intent set.
 const relayEnabled = paraRaidEnabled(env);
-const client = createDiscordClient(relayEnabled);
+const journalMirrorOn = Boolean(guildConfig.journalChannelId);
+const client = createDiscordClient(relayEnabled || journalMirrorOn);
 // Build the scrypt module ONCE and share it with the command registry, so the /ping command and
 // its component (Refresh/Retry) handlers use the SAME ScryptRestClient. Building it twice would
 // duplicate the clients and fragment live state (e.g. connectivity up/down tracking). Same
@@ -67,6 +70,15 @@ const onboarding = buildOnboardingModule(env, client);
 // (ready-or-once, mirrors buildOnboardingModule above). No-op (paraRaidRuntime stays undefined)
 // when the module is off.
 const paraRaidRuntime = paraRaid ? startParaRaidRuntime(paraRaid, client, env) : undefined;
+// Journal mirror listeners register at boot (like the relay); rituals start at ready below
+// (they need the channel fetched).
+const journalMirror = journalMirrorOn
+  ? startJournalMirror(client, scrypt.rest, {
+      channelId: guildConfig.journalChannelId,
+      ownerId: env.DISCORD_OWNER_ID,
+    })
+  : undefined;
+let journalRituals: ReturnType<typeof startJournalRituals> | null = null;
 
 // SUP watchdog: probes scrypt/para-raid every 5 min and logs down/recovered transitions at
 // warn/notice, which the sink below mirrors to the logs channel. Started at ready so the sink
@@ -95,6 +107,27 @@ client.once(Events.ClientReady, async (c) => {
   // notice, not info: a (re)boot is a notable event the logs channel should show.
   log.notice("uxie ready", { tag: c.user.tag, guild: env.DISCORD_DEV_GUILD_ID });
   watchdog = startWatchdog(scrypt.rest, paraRaid?.client);
+
+  // Journal rituals: morning briefing / evening nudge / weekly digest into the journal channel.
+  // Same degrade-don't-crash contract as the log sink: an unusable channel logs and skips.
+  if (journalMirrorOn) {
+    try {
+      const ch = await c.channels.fetch(guildConfig.journalChannelId);
+      if (ch && ch.isTextBased() && ch.isSendable() && "threads" in ch) {
+        journalRituals = startJournalRituals(
+          scrypt.rest,
+          paraRaid?.client,
+          { send: (content) => ch.send(content), createThread: (o) => ch.threads.create(o) },
+          { ...guildConfig.journalRituals, bundle: guildConfig.triageBundle || undefined },
+        );
+        log.info("journal rituals started", { channelId: guildConfig.journalChannelId });
+      } else {
+        log.error("journal channel not usable — rituals off", { channelId: guildConfig.journalChannelId });
+      }
+    } catch (err) {
+      log.error("journal channel fetch failed — rituals off", { channelId: guildConfig.journalChannelId, err });
+    }
+  }
 });
 
 client.on(Events.InteractionCreate, async (i) => {
@@ -111,6 +144,8 @@ client.on(Events.InteractionCreate, async (i) => {
 async function shutdown(signal: string): Promise<void> {
   log.info("shutting down", { signal });
   watchdog?.stop();
+  journalRituals?.stop();
+  journalMirror?.stop();
   paraRaidRuntime?.stop();
   await client.destroy();
   process.exit(0);

@@ -26,21 +26,41 @@ export const HybridSearchResponse = z.object({
 });
 export type HybridSearchResponse = z.infer<typeof HybridSearchResponse>;
 
-// === JOURNAL (POST /api/journal/:date/entries → day bundle) ===
+// === JOURNAL (GET/POST/PATCH/DELETE /api/journal/... → day bundle) ===
 
 export const JournalEntryItem = z.object({
   id: z.string(), // exact UTC ISO timestamp, stamped server-side
   displayTime: z.string(),
   body: z.string(),
 });
+export type JournalEntryItem = z.infer<typeof JournalEntryItem>;
+
+// Loose parses of the bundle's side-lists (server shapes: tasks-repo Task / related RelatedNote).
+// Only the fields uxie renders; .catch keeps a malformed row from failing the whole bundle.
+export const JournalTask = z.object({
+  title: z.string().catch("(untitled task)"),
+  status: z.string().catch("open"),
+});
+export type JournalTask = z.infer<typeof JournalTask>;
+
+export const JournalRelatedNote = z.object({
+  path: z.string(),
+  title: z.string().catch("(untitled)"),
+  score: z.number().catch(0),
+});
+export type JournalRelatedNote = z.infer<typeof JournalRelatedNote>;
 
 export const JournalDayBundle = z.object({
   date: z.string(), // YYYY-MM-DD
   entries: z.array(JournalEntryItem),
-  tasks_due: z.array(z.unknown()),
-  related: z.array(z.unknown()),
+  tasks_due: z.array(JournalTask).catch([]),
+  related: z.array(JournalRelatedNote).catch([]),
 });
 export type JournalDayBundle = z.infer<typeof JournalDayBundle>;
+
+// GET /api/journal/calendar → [{date, count}] (entry count per existing day file).
+export const JournalCalendar = z.array(z.object({ date: z.string(), count: z.number() }));
+export type JournalCalendar = z.infer<typeof JournalCalendar>;
 
 // === DAILY CONTEXT (GET /api/daily-context) ===
 
