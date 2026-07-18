@@ -74,10 +74,11 @@ export class ScryptRestClient {
   // than on every probe; repeat-down probes (e.g. the /ping auto-retry loop) stay silent.
   private lastHealthy: boolean | null = null;
 
-  // REST health probe used by /ping (Design §6.7). Scrypt exposes no /api/health, so we hit
-  // the shallow GET /api/daily-context (canonical hyphen path; the old underscore spelling is
-  // a permanent alias but new code uses the canonical one). Degrade-don't-crash: returns
-  // {ok,reason} and never throws, so /ping always replies even when scrypt is down.
+  // REST health probe used by /ping + the SUP watchdog. Hits GET /api/health (constant-time
+  // liveness, scrypt PR #17) — previously this probed /api/daily-context, whose O(vault) disk
+  // walk blew the 500ms budget on large vaults and reported a healthy scrypt as down.
+  // Degrade-don't-crash: returns {ok,reason} and never throws, so /ping always replies even
+  // when scrypt is down. NOTE: requires scrypt >= PR #17; older servers 404 → reason "server".
   async health(): Promise<HealthResult> {
     const result = await this.probeHealth();
     this.noteTransition(result);
@@ -303,7 +304,7 @@ export class ScryptRestClient {
 
   private async probeHealth(): Promise<HealthResult> {
     try {
-      const res = await fetch(`${this.baseUrl}/api/daily-context`, {
+      const res = await fetch(`${this.baseUrl}/api/health`, {
         method: "GET",
         headers: this.headers(),
         signal: AbortSignal.timeout(500),

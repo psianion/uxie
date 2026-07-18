@@ -35,7 +35,7 @@ async function captureLogs(fn: () => Promise<void>): Promise<LogEntry[]> {
 }
 
 describe("ScryptRestClient.health", () => {
-  test("returns {ok:true} when daily-context 200", async () => {
+  test("returns {ok:true} when /api/health 200", async () => {
     const restore = withFetch(async () => new Response(JSON.stringify({}), { status: 200 }));
     try {
       expect(await client().health()).toEqual({ ok: true });
@@ -44,7 +44,7 @@ describe("ScryptRestClient.health", () => {
     }
   });
 
-  test("probes GET /api/daily-context (canonical) with bearer auth and 500ms timeout", async () => {
+  test("probes GET /api/health (constant-time liveness) with bearer auth and 500ms timeout", async () => {
     let capturedUrl = "";
     let capturedInit: RequestInit | undefined;
     const restore = withFetch(async (url, init) => {
@@ -54,7 +54,7 @@ describe("ScryptRestClient.health", () => {
     });
     try {
       await client().health();
-      expect(capturedUrl).toBe("http://scrypt:3000/api/daily-context");
+      expect(capturedUrl).toBe("http://scrypt:3000/api/health");
       expect(capturedInit?.method).toBe("GET");
       const headers = capturedInit?.headers as Record<string, string>;
       expect(headers["Authorization"]).toBe("Bearer bearer");
