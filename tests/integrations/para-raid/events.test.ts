@@ -292,7 +292,6 @@ describe("librarian sessions (U6 — adapter_ref is not a thread id)", () => {
       adapter_id: "uxie",
       adapter_ref: LIB_REF,
       status: "live",
-      tmux_session: "tmux-lib",
       cwd: "/work",
       created_at: 1,
       updated_at: 2,
