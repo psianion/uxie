@@ -127,7 +127,6 @@ describe("ParaRaidClient — GET /v1/sessions", () => {
       adapter_id: "a1",
       adapter_ref: "thread-1",
       status: "live",
-      tmux_session: "tmux-1",
       cwd: "/work",
       created_at: 1,
       updated_at: 2,

@@ -127,7 +127,6 @@ describe("relayMessage — librarian thread (U6)", () => {
       adapter_id: "uxie",
       adapter_ref: "librarian:2026-07-16",
       status: "live",
-      tmux_session: "tmux-lib",
       cwd: "/work",
       created_at: 1,
       updated_at: 2,

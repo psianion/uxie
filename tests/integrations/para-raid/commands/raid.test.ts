@@ -113,7 +113,6 @@ function sessionRow(over: Partial<Session> = {}): Session {
     adapter_id: "a1",
     adapter_ref: "thread-1",
     status: "live",
-    tmux_session: "t",
     cwd: "/w",
     created_at: 1,
     updated_at: 2,

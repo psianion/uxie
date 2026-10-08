@@ -10,7 +10,6 @@ function session(id: string, threadId: string, status: SessionStatus): Session {
     adapter_id: "a1",
     adapter_ref: threadId,
     status,
-    tmux_session: `tmux-${id}`,
     cwd: "/work",
     created_at: 1,
     updated_at: 2,

@@ -15,7 +15,6 @@ export interface Session {
   adapter_id: string;
   adapter_ref: string;
   status: SessionStatus;
-  tmux_session: string;
   cwd: string;
   created_at: number;
   updated_at: number;
